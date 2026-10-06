@@ -1,0 +1,16 @@
+[project]
+name = "linkud-gateway"
+version = "0.0.1"
+description = "MCP 도구 신뢰도 판정 게이트웨이 — 도구 설명 프롬프트 인젝션 탐지 기반 신뢰도-권한 자동 매핑"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.2,<3",   # MCP 공식 Python SDK
+    "pyyaml>=6",     # 설정 파일 읽기
+    "uvicorn>=0.30", # HTTP 서버 실행
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

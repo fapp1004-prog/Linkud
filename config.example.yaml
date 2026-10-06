@@ -1,0 +1,8 @@
+# Linkud 게이트웨이 설정 예시 (형식 초안) — 복사해서 config.yaml로 사용
+gateway:
+  name: linkud-gateway
+
+# 게이트웨이 뒤에 붙일 MCP 서버 목록
+downstreams:
+  - name: benign
+    url: http://localhost:8001/mcp
