@@ -1,0 +1,43 @@
+# EC2 운영 구성: 게이트웨이 + nginx(TLS) + certbot(인증서 갱신)
+#   deploy.sh가 .env(SSM에서 받은 비밀값)와 config.yaml을 만든 뒤 실행한다.
+services:
+  gateway:
+    image: ${LINKUD_IMAGE:-ghcr.io/fapp1004-prog/linkud:latest}
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - linkud-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["8000"]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN 필요}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - certbot-www:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    # 갱신된 인증서를 반영하도록 6시간마다 설정을 다시 읽는다
+    command: ["/bin/sh", "-c", "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g 'daemon off;'"]
+    depends_on: [gateway]
+
+  certbot:
+    image: certbot/certbot:v2.11.0
+    restart: unless-stopped
+    volumes:
+      - certbot-www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+
+volumes:
+  linkud-data:
+  certbot-www:
+  letsencrypt:

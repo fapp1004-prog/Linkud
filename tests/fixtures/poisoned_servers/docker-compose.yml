@@ -16,7 +16,7 @@ services:
     security_opt: ["no-new-privileges:true"]
   rugpull:
     build: {context: ../../.., dockerfile: tests/fixtures/poisoned_servers/Dockerfile}
-    environment: {SAMPLE_SET: poisoned, RUGPULL_AFTER: "1"}
+    environment: {SAMPLE_SET: poisoned, RUGPULL_AFTER: "3"}
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -31,5 +31,6 @@ services:
     volumes: ["./gateway.docker.yaml:/app/config.yaml:ro"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LINKUD_AUTH_TOKENS: ${LINKUD_AUTH_TOKENS:-smoke-token}
     ports: ["127.0.0.1:8000:8000"]
     depends_on: [poisoned, judge, rugpull, mixed]

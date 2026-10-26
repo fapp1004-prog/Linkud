@@ -55,6 +55,10 @@ class GatewayConfig:
     osv_url: str = "https://api.osv.dev"
     syft_path: str = "syft"
     supply_timeout: float = 15.0  # 넘기면 이번 판정은 정보 없음, 뒤에서 계속 조회
+    # 공개 배포: 허용할 Host 헤더(예: ["gw.example.com"]). 비우면 루프백 주소만 허용
+    allowed_hosts: list[str] = field(default_factory=list)
+    # 다운스트림 도구 결과 크기 상한(바이트). 넘으면 에이전트에게 넘기지 않는다
+    max_result_bytes: int = 1_000_000
     downstreams: list[DownstreamConfig] = field(default_factory=list)
 
 

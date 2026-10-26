@@ -16,6 +16,9 @@ gateway:
   supply_enabled: true  # Registry → 패키지 → SBOM(syft) → OSV
   syft_path: syft
   supply_timeout: 15    # 넘기면 이번 판정은 정보 없음, 끝나면 재검증
+  # allowed_hosts: [gw.example.com]   # 공개 배포 시 Host 헤더 허용 목록
+  max_result_bytes: 1000000          # 도구 결과 크기 상한
+# 접속 토큰은 환경변수 LINKUD_AUTH_TOKENS(쉼표 구분)로 준다. 루프백이 아닌 주소에 바인딩하면 필수.
 
 # 게이트웨이 뒤에 붙일 원격 HTTP MCP 서버 목록 (stdio 서버는 받지 않음)
 # 에이전트에게는 <name>__<도구이름> 으로 노출된다

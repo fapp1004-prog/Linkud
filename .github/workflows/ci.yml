@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.32"
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run pytest -q
+
+  docker-smoke:
+    # 오염 테스트 서버를 컨테이너로 띄우고 게이트웨이가 걸러내는지 확인한다
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.32"
+      - run: uv sync --frozen
+      - name: 오염 테스트 서버 + 게이트웨이 기동
+        run: docker compose -f tests/fixtures/poisoned_servers/docker-compose.yml up -d --build
+        env:
+          LINKUD_AUTH_TOKENS: smoke-token
+      - name: 스모크 테스트
+        run: uv run python eval/docker_smoke.py
+        env:
+          LINKUD_AUTH_TOKENS: smoke-token
+      - name: 실패 시 로그
+        if: failure()
+        run: docker compose -f tests/fixtures/poisoned_servers/docker-compose.yml logs --tail 200
+      - name: 정리
+        if: always()
+        run: docker compose -f tests/fixtures/poisoned_servers/docker-compose.yml down -v

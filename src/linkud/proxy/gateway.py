@@ -16,13 +16,18 @@ import httpx
 import mcp.types as types
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from linkud import __version__
-from linkud.config import GatewayConfig
+from linkud.config import ConfigError, GatewayConfig
 from linkud.enforcement.guard import Enforcer
 from linkud.proxy import naming
+from linkud.proxy.auth import TOKENS_ENV, BearerAuth, load_tokens
 from linkud.proxy.downstream import Downstream, DownstreamUnavailable, HttpDownstream
 from linkud.store.base import Store
 from linkud.store.memory import MemoryCache
@@ -48,9 +53,16 @@ def _error_result(message: str) -> types.CallToolResult:
 class Gateway:
     """다운스트림 묶음. 목록 집계와 호출 라우팅을 맡는다."""
 
-    def __init__(self, downstreams: Sequence[Downstream], enforcer: Enforcer) -> None:
+    def __init__(
+        self,
+        downstreams: Sequence[Downstream],
+        enforcer: Enforcer,
+        *,
+        max_result_bytes: int = 1_000_000,
+    ) -> None:
         self.downstreams = {d.name: d for d in downstreams}
         self.enforcer = enforcer
+        self.max_result_bytes = max_result_bytes
         # 노출 이름 → 마지막 목록에서 에이전트에게 보여준 inputSchema
         self._schemas: dict[str, dict[str, Any]] = {}
 
@@ -101,7 +113,11 @@ class Gateway:
         except MCPError as exc:
             return _error_result(f"Downstream error: {exc.message}")
         # 다운스트림 서버 정보 등 메타데이터는 에이전트에게 넘기지 않는다
-        return result.model_copy(update={"meta": None})
+        result = result.model_copy(update={"meta": None})
+        if len(result.model_dump_json(by_alias=True)) > self.max_result_bytes:
+            logger.warning("도구 결과 크기 상한 초과: %s", name)
+            return _error_result(f"Tool result too large: {name}")
+        return result
 
 
 def build_server(gateway: Gateway, name: str = "linkud-gateway") -> Server[Any]:
@@ -187,9 +203,27 @@ def create_app(
     )
     if supply is not None:
         supply.on_update = service.invalidate_server
-    gateway = Gateway(downstreams, Enforcer(service, cache, store))
+    gateway = Gateway(
+        downstreams, Enforcer(service, cache, store), max_result_bytes=config.max_result_bytes
+    )
     server = build_server(gateway, config.name)
-    app = server.streamable_http_app(streamable_http_path=config.path, host=config.host)
+    security = None
+    if config.allowed_hosts:
+        security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(config.allowed_hosts),
+            allowed_origins=[f"https://{h}" for h in config.allowed_hosts],
+        )
+
+    async def healthz(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "version": __version__})
+
+    app = server.streamable_http_app(
+        streamable_http_path=config.path,
+        host=config.host,
+        transport_security=security,
+        custom_starlette_routes=[Route("/healthz", healthz)],
+    )
     session_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
@@ -208,4 +242,13 @@ def create_app(
 
     app.router.lifespan_context = lifespan
     app.state.gateway = gateway
+
+    tokens = load_tokens()
+    if tokens:
+        app.add_middleware(BearerAuth, tokens=tokens)
+    elif config.host in ("127.0.0.1", "localhost", "::1"):
+        logger.warning("접속 토큰 없음: 루프백 주소에서만 인증 없이 실행 (%s 미설정)", TOKENS_ENV)
+    else:
+        # 공개 주소에 인증 없이 뜨지 않는다 (fail-closed)
+        raise ConfigError(f"{config.host}에 바인딩하려면 {TOKENS_ENV} 접속 토큰이 필요함")
     return app
