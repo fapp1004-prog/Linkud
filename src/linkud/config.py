@@ -1,0 +1,74 @@
+"""게이트웨이 설정 읽기.
+
+다운스트림은 원격 HTTP(S) MCP 서버만 받는다. stdio 서버 실행은 범위 밖이며 금지한다
+(남의 코드를 게이트웨이 권한으로 실행하지 않기 위해, CLAUDE.md 원칙).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import yaml
+
+# 다운스트림 이름은 도구 이름 접두사로 쓰이므로 구분자("__")가 들어가면 안 된다.
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+class ConfigError(ValueError):
+    """설정 파일이 형식에 맞지 않을 때."""
+
+
+@dataclass(frozen=True)
+class DownstreamConfig:
+    name: str
+    url: str
+
+
+@dataclass(frozen=True)
+class GatewayConfig:
+    name: str = "linkud-gateway"
+    host: str = "127.0.0.1"
+    port: int = 8000
+    path: str = "/mcp"
+    # 다운스트림 연결·응답 타임아웃(초)
+    connect_timeout: float = 10.0
+    call_timeout: float = 30.0
+    downstreams: list[DownstreamConfig] = field(default_factory=list)
+
+
+def _parse_downstream(raw: Any) -> DownstreamConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"downstream 항목은 매핑이어야 함: {raw!r}")
+    if "command" in raw or "args" in raw:
+        raise ConfigError("stdio 다운스트림은 지원하지 않음 (원격 HTTP 서버만 등록)")
+    name = raw.get("name")
+    url = raw.get("url")
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        raise ConfigError(f"다운스트림 이름은 소문자·숫자·하이픈만 허용: {name!r}")
+    if not isinstance(url, str) or urlparse(url).scheme not in ("http", "https"):
+        raise ConfigError(f"다운스트림 URL은 http(s)만 허용: {url!r}")
+    return DownstreamConfig(name=name, url=url)
+
+
+def parse_config(data: dict[str, Any]) -> GatewayConfig:
+    gw = data.get("gateway") or {}
+    if not isinstance(gw, dict):
+        raise ConfigError("gateway 항목은 매핑이어야 함")
+    downstreams = [_parse_downstream(d) for d in data.get("downstreams") or []]
+    names = [d.name for d in downstreams]
+    if len(names) != len(set(names)):
+        raise ConfigError("다운스트림 이름이 중복됨")
+    known = {k: gw[k] for k in GatewayConfig.__dataclass_fields__ if k in gw and k != "downstreams"}
+    return GatewayConfig(**known, downstreams=downstreams)
+
+
+def load_config(path: str | Path) -> GatewayConfig:
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ConfigError("설정 파일 최상위는 매핑이어야 함")
+    return parse_config(data)
