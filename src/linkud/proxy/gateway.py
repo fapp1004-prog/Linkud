@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
+import httpx
 import mcp.types as types
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
@@ -30,6 +31,10 @@ from linkud.verify.decision import NoSupplyInfo, Policy
 from linkud.verify.judge.base import Judge
 from linkud.verify.pipeline import PipelineVerifier, SupplyChecker
 from linkud.verify.service import VerificationService, Verifier
+from linkud.verify.supply.checker import RegistrySupplyChecker, SupplyTarget
+from linkud.verify.supply.osv import OsvClient
+from linkud.verify.supply.registry import RegistryClient
+from linkud.verify.supply.sbom import SyftSbom
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +130,18 @@ def make_verifier(config: GatewayConfig, supply: SupplyChecker | None = None) ->
     return PipelineVerifier(make_judge(config), supply, policy)
 
 
+def make_supply_checker(config: GatewayConfig, http: httpx.AsyncClient) -> RegistrySupplyChecker:
+    targets = {d.name: SupplyTarget(d.registry, d.url) for d in config.downstreams}
+    return RegistrySupplyChecker(
+        targets,
+        RegistryClient(http, config.registry_url),
+        OsvClient(http, config.osv_url),
+        http,
+        SyftSbom(config.syft_path),
+        timeout=config.supply_timeout,
+    )
+
+
 def create_app(
     config: GatewayConfig,
     *,
@@ -145,12 +162,18 @@ def create_app(
         ]
     cache = MemoryCache()
     store = store if store is not None else SqliteStore(config.db_path)
+    http = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+    supply = None
+    if verifier is None and config.supply_enabled:
+        supply = make_supply_checker(config, http)
     service = VerificationService(
-        verifier if verifier is not None else make_verifier(config),
+        verifier if verifier is not None else make_verifier(config, supply),
         cache,
         store,
         timeout=config.verify_timeout,
     )
+    if supply is not None:
+        supply.on_update = service.invalidate_server
     gateway = Gateway(downstreams, Enforcer(service, cache, store))
     server = build_server(gateway, config.name)
     app = server.streamable_http_app(streamable_http_path=config.path, host=config.host)
@@ -168,6 +191,7 @@ def create_app(
             for ds in downstreams:
                 if isinstance(ds, HttpDownstream):
                     ds.stop()
+        await http.aclose()
 
     app.router.lifespan_context = lifespan
     app.state.gateway = gateway

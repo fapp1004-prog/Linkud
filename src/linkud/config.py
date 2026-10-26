@@ -26,6 +26,8 @@ class ConfigError(ValueError):
 class DownstreamConfig:
     name: str
     url: str
+    # MCP Registry의 server.json 이름 (예: io.github.org/server). 없으면 공급망 정보 없음
+    registry: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,12 @@ class GatewayConfig:
     # 결정 테이블 정책
     high_confidence: float = 0.8
     no_supply_info: str = "partial"  # partial(부분신뢰) | record(기록만)
+    # 공급망 검증
+    supply_enabled: bool = True
+    registry_url: str = "https://registry.modelcontextprotocol.io"
+    osv_url: str = "https://api.osv.dev"
+    syft_path: str = "syft"
+    supply_timeout: float = 15.0  # 넘기면 이번 판정은 정보 없음, 뒤에서 계속 조회
     downstreams: list[DownstreamConfig] = field(default_factory=list)
 
 
@@ -61,7 +69,10 @@ def _parse_downstream(raw: Any) -> DownstreamConfig:
         raise ConfigError(f"다운스트림 이름은 소문자·숫자·하이픈만 허용: {name!r}")
     if not isinstance(url, str) or urlparse(url).scheme not in ("http", "https"):
         raise ConfigError(f"다운스트림 URL은 http(s)만 허용: {url!r}")
-    return DownstreamConfig(name=name, url=url)
+    registry = raw.get("registry")
+    if registry is not None and not isinstance(registry, str):
+        raise ConfigError(f"registry는 문자열이어야 함: {registry!r}")
+    return DownstreamConfig(name=name, url=url, registry=registry)
 
 
 def parse_config(data: dict[str, Any]) -> GatewayConfig:

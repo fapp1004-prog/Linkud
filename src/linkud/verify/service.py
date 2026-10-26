@@ -51,6 +51,16 @@ class VerificationService:
             await self.cache.set(verdict_key(v.server, v.tool_hash), v)
             self._latest_by_name[(v.server, v.tool)] = v
 
+    async def invalidate_server(self, server: str) -> None:
+        """서버의 현재 판정을 캐시에서 지워 다음 목록 요청 때 다시 검증하게 한다.
+
+        공급망 조회가 뒤늦게 끝났을 때 등 판정 입력이 바뀐 경우에 쓴다.
+        """
+        for (srv, _), verdict in list(self._latest_by_name.items()):
+            if srv == server:
+                await self.cache.delete(verdict_key(server, verdict.tool_hash))
+        await self.store.log(AuditEvent("reverify_requested", server, "*", {}))
+
     async def verdicts(
         self, server: str, tools: Sequence[types.Tool]
     ) -> dict[str, ToolVerdict | None]:

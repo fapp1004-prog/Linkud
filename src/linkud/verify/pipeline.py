@@ -11,6 +11,7 @@ from linkud.verify.decision import Policy, SupplySignals, decide, is_read_tool
 from linkud.verify.hashing import canonical_tool
 from linkud.verify.judge.base import Judge
 from linkud.verify.service import VerifyRequest
+from linkud.verify.supply.annotations import annotation_mismatch
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ class PipelineVerifier:
         definition = canonical_tool(req.tool)
         analysis = await analyze(definition, self.judge)
         supply = await self._supply(req.server)
-        decision = decide(analysis, supply, policy=self.policy)
+        mismatch = annotation_mismatch(definition)
+        decision = decide(analysis, supply, annotation_mismatch=mismatch, policy=self.policy)
         is_read, read_reasons = is_read_tool(definition, analysis)
 
         reasons = decision.reasons + read_reasons
@@ -59,6 +61,7 @@ class PipelineVerifier:
             reasons=reasons,
             details={
                 "decision_row": decision.row,
+                "annotation_mismatch": mismatch,
                 "analysis": analysis.to_dict(),
                 "supply": {
                     "available": supply.available,
