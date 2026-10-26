@@ -1,0 +1,499 @@
+{
+  "meta": {
+    "time": "2026-10-26 09:03:59",
+    "python": "3.12.3",
+    "judge": "없음 (규칙만)"
+  },
+  "detection": {
+    "summary": {
+      "rules": {
+        "tp": 24,
+        "fn": 6,
+        "fp": 2,
+        "tn": 52,
+        "p": 30,
+        "n": 54
+      },
+      "llm": null,
+      "both": null
+    },
+    "by_category": {
+      "explicit_hijack": {
+        "rules": [
+          4,
+          4
+        ]
+      },
+      "implicit_hijack": {
+        "rules": [
+          3,
+          3
+        ]
+      },
+      "param_tamper": {
+        "rules": [
+          2,
+          3
+        ]
+      },
+      "exfiltration": {
+        "rules": [
+          2,
+          4
+        ]
+      },
+      "hidden_field": {
+        "rules": [
+          4,
+          4
+        ]
+      },
+      "obfuscated": {
+        "rules": [
+          4,
+          4
+        ]
+      },
+      "subtle": {
+        "rules": [
+          2,
+          4
+        ]
+      },
+      "korean": {
+        "rules": [
+          3,
+          4
+        ]
+      }
+    },
+    "false_positives": {
+      "rules": [
+        "b03",
+        "b13"
+      ]
+    },
+    "false_negatives": {
+      "rules": [
+        "p08",
+        "p11",
+        "p13",
+        "p23",
+        "p24",
+        "p29"
+      ]
+    }
+  },
+  "rugpull": [
+    {
+      "judge": "규칙만 (LLM 기만 가정)",
+      "total": 30,
+      "change_detected": 30,
+      "hidden_after_change": 24,
+      "requests_to_hide": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "permission": {
+    "two_signal": {
+      "accuracy": [
+        29,
+        39
+      ],
+      "read_recall": [
+        13,
+        23
+      ],
+      "write_exposed": []
+    },
+    "three_signal": null,
+    "partial_e2e": {
+      "servers": 6,
+      "visible": 13,
+      "write_exposed": []
+    },
+    "rows": [
+      {
+        "name": "git_status",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_diff_unstaged",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_diff_staged",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_diff",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_commit",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_add",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_reset",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_log",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_create_branch",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_checkout",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_show",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "git_branch",
+        "source": "pypi:mcp-server-git@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "get_current_time",
+        "source": "pypi:mcp-server-time@2026.10.19",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "convert_time",
+        "source": "pypi:mcp-server-time@2026.10.19",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "fetch",
+        "source": "pypi:mcp-server-fetch@2026.10.24",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "sequentialthinking",
+        "source": "npm:@modelcontextprotocol/server-sequential-thinking@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "read_file",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "read_text_file",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "read_media_file",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "read_multiple_files",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "write_file",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "edit_file",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "create_directory",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "list_directory",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "list_directory_with_sizes",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "directory_tree",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "move_file",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "search_files",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "get_file_info",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "list_allowed_directories",
+        "source": "npm:@modelcontextprotocol/server-filesystem@2.0.1",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "create_entities",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "create_relations",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "add_observations",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "delete_entities",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "delete_observations",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "delete_relations",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": false,
+        "two_signal": false,
+        "three_signal": null
+      },
+      {
+        "name": "read_graph",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "search_nodes",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": true,
+        "two_signal": true,
+        "three_signal": null
+      },
+      {
+        "name": "open_nodes",
+        "source": "npm:@modelcontextprotocol/server-memory@2.0.0",
+        "truth_read": true,
+        "two_signal": false,
+        "three_signal": null
+      }
+    ]
+  },
+  "latency": {
+    "judge": "FakeJudge (LLM 지연 제외)",
+    "n": 200,
+    "concurrency": 10,
+    "total_calls": 1000,
+    "direct": {
+      "list_tools": {
+        "n": 200,
+        "mean": 2.7765600499924403,
+        "p50": 2.508365000039703,
+        "p95": 3.9968559999579156
+      },
+      "call_tool": {
+        "n": 200,
+        "mean": 3.4467518599922187,
+        "p50": 2.7710599999863916,
+        "p95": 4.815473999997266
+      },
+      "throughput_rps": 260.4707238382039
+    },
+    "gateway_cache_hit": {
+      "list_tools": {
+        "n": 200,
+        "mean": 6.789810060000718,
+        "p50": 6.030436000173722,
+        "p95": 10.055597000018679
+      },
+      "call_tool": {
+        "n": 200,
+        "mean": 6.686162979989376,
+        "p50": 5.920244999970237,
+        "p95": 8.68958199998815
+      },
+      "throughput_rps": 122.78738501285915
+    },
+    "first_verification": {
+      "list_tools": {
+        "n": 20,
+        "mean": 12.634775850017377,
+        "p50": 8.879245999878549,
+        "p95": 60.03800400003456
+      }
+    }
+  },
+  "judge_robustness": {
+    "rows": [
+      {
+        "id": "j01",
+        "rules": "general",
+        "tier_if_llm_fooled": "pending"
+      },
+      {
+        "id": "j02",
+        "rules": "none",
+        "tier_if_llm_fooled": "trusted"
+      },
+      {
+        "id": "j03",
+        "rules": "general",
+        "tier_if_llm_fooled": "pending"
+      },
+      {
+        "id": "j04",
+        "rules": "general",
+        "tier_if_llm_fooled": "pending"
+      },
+      {
+        "id": "j05",
+        "rules": "general",
+        "tier_if_llm_fooled": "pending"
+      },
+      {
+        "id": "j06",
+        "rules": "none",
+        "tier_if_llm_fooled": "trusted"
+      }
+    ],
+    "success_if_llm_fooled": [
+      2,
+      6
+    ],
+    "llm_fooled": null,
+    "success": null
+  }
+}

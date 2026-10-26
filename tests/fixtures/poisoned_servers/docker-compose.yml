@@ -1,0 +1,35 @@
+# 오염 테스트 서버들을 호스트와 격리해서 띄운다.
+#   docker compose -f tests/fixtures/poisoned_servers/docker-compose.yml up --build
+# 게이트웨이는 같은 네트워크에서 gateway.docker.yaml로 붙는다. 호스트에는 포트를 열지 않는다.
+services:
+  poisoned:
+    build: {context: ../../.., dockerfile: tests/fixtures/poisoned_servers/Dockerfile}
+    environment: {SAMPLE_SET: poisoned}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  judge:
+    build: {context: ../../.., dockerfile: tests/fixtures/poisoned_servers/Dockerfile}
+    environment: {SAMPLE_SET: judge}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  rugpull:
+    build: {context: ../../.., dockerfile: tests/fixtures/poisoned_servers/Dockerfile}
+    environment: {SAMPLE_SET: poisoned, RUGPULL_AFTER: "1"}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  mixed:
+    build: {context: ../../.., dockerfile: tests/fixtures/poisoned_servers/Dockerfile}
+    environment: {SAMPLE_SET: mixed}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  gateway:
+    build: {context: ../../.., dockerfile: deploy/Dockerfile}
+    volumes: ["./gateway.docker.yaml:/app/config.yaml:ro"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on: [poisoned, judge, rugpull, mixed]

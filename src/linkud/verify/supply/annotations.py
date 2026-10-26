@@ -10,10 +10,11 @@ from typing import Any
 
 from linkud.verify.decision import name_says_write
 
+# commit·push처럼 명사로도 흔히 쓰이는 단어("staged for commit")는 오탐이 많아 넣지 않는다
 _WRITE_VERBS = re.compile(
     r"\b(deletes?|removes?|overwrites?|creates?|sends?|writes?|updates?|modif(?:y|ies)|uploads?|"
     r"executes?|runs?\s+(?:a\s+)?(?:command|script|shell)|drops?|kills?|purges?|erases?|wipes?|"
-    r"transfers?|publish(?:es)?|commits?|pushes)\b",
+    r"transfers?|publish(?:es)?)\b",
     re.IGNORECASE,
 )
 
