@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import mcp.types as types
 
+from linkud.enforcement.arguments import dangerous_arguments
 from linkud.models import Tier, ToolVerdict
 from linkud.store.base import AuditEvent, Cache, Store, verdict_key
 from linkud.verify.decision import permits, server_tier
@@ -28,8 +30,16 @@ class CallDecision:
 
 
 class Enforcer:
-    def __init__(self, service: VerificationService, cache: Cache, store: Store) -> None:
+    def __init__(
+        self,
+        service: VerificationService,
+        cache: Cache,
+        store: Store,
+        *,
+        inspect_arguments: bool = True,
+    ) -> None:
         self.service = service
+        self.inspect_arguments = inspect_arguments
         self.cache = cache
         self.store = store
         # 서버 → (도구 이름 → 마지막 목록 요청에서 본 정의 해시). 호출 가드가 쓴다
@@ -62,7 +72,9 @@ class Enforcer:
         seen = self._seen.get(server, {})
         return {name: await self.cache.get(verdict_key(server, h)) for name, h in seen.items()}
 
-    async def check_call(self, server: str, tool: str) -> CallDecision:
+    async def check_call(
+        self, server: str, tool: str, arguments: dict[str, Any] | None = None
+    ) -> CallDecision:
         verdicts = await self._cached_verdicts(server)
         tier = server_tier(verdicts.values())
         verdict = verdicts.get(tool)
@@ -74,6 +86,8 @@ class Enforcer:
             label = tier.label if tier else "없음"
             kind = "읽기" if verdict.is_read else "쓰기"
             decision = CallDecision(False, f"서버 등급 {label}: {kind} 도구 호출 불가")
+        elif self.inspect_arguments and (danger := dangerous_arguments(arguments)):
+            decision = CallDecision(False, f"위험한 인자: {', '.join(danger)}")
         else:
             decision = CallDecision(True, f"서버 등급 {tier.label if tier else ''}")
         await self.store.log(

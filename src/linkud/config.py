@@ -59,6 +59,8 @@ class GatewayConfig:
     allowed_hosts: list[str] = field(default_factory=list)
     # 다운스트림 도구 결과 크기 상한(바이트). 넘으면 에이전트에게 넘기지 않는다
     max_result_bytes: int = 1_000_000
+    # 인자 검사(확장): 허용된 도구라도 민감 경로 등 위험한 값으로 부르면 거부
+    arg_inspection: bool = True
     downstreams: list[DownstreamConfig] = field(default_factory=list)
 
 

@@ -7,15 +7,17 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
-from collections.abc import Sequence
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 import anyio
 import mcp.types as types
 
-from linkud.models import ToolVerdict
+from linkud.models import Tier, ToolVerdict
 from linkud.store.base import AuditEvent, Cache, Store, verdict_key
 from linkud.verify.hashing import tool_hash
 
@@ -44,12 +46,58 @@ class VerificationService:
         self._locks: dict[str, anyio.Lock] = {}
         # (서버, 도구 이름) → 가장 최근 판정. 정의 변경(러그풀) 감지 기록용
         self._latest_by_name: dict[tuple[str, str], ToolVerdict] = {}
+        # 새 판정이 나올 때 부르는 콜백 (Slack 알림 등). 실패해도 판정에는 영향 없음
+        self.on_verdict: list[Callable[[ToolVerdict], Awaitable[None]]] = []
 
     async def warm(self) -> None:
         """저장소의 판정 이력으로 캐시를 채운다(재시작 후 재검증 방지)."""
         for v in sorted(await self.store.latest_verdicts(), key=lambda v: v.created_at):
             await self.cache.set(verdict_key(v.server, v.tool_hash), v)
             self._latest_by_name[(v.server, v.tool)] = v
+
+    def pending(self) -> list[ToolVerdict]:
+        """현재 정의 기준으로 승인 대기인 도구들."""
+        return [v for v in self._latest_by_name.values() if v.tier is Tier.PENDING]
+
+    def latest(self) -> list[ToolVerdict]:
+        return list(self._latest_by_name.values())
+
+    async def apply_decision(
+        self, server: str, tool: str, tool_hash: str, tier: Tier, *, actor: str, note: str = ""
+    ) -> ToolVerdict:
+        """사람이 등급을 확정한다. 지금 보이는 정의(해시)에 대해서만 받는다.
+
+        확정은 해시 단위라서, 승인 뒤 정의가 바뀌면(러그풀) 자동으로 다시 검증 경로를 탄다.
+        """
+        current = self._latest_by_name.get((server, tool))
+        if current is None or current.tool_hash != tool_hash:
+            raise LookupError("현재 정의와 해시가 다름 (정의가 바뀌었거나 없는 도구)")
+        verdict = dataclasses.replace(
+            current,
+            tier=tier,
+            reasons=[f"관리자 확정: {tier.label} (by {actor}){': ' + note if note else ''}"]
+            + current.reasons,
+            details={**current.details, "decided_by": actor, "previous_tier": current.tier.value},
+            created_at=time.time(),
+        )
+        await self.cache.set(verdict_key(server, tool_hash), verdict)
+        await self.store.save_verdict(verdict)
+        self._latest_by_name[(server, tool)] = verdict
+        await self.store.log(
+            AuditEvent(
+                "decision",
+                server,
+                tool,
+                {
+                    "hash": tool_hash,
+                    "tier": tier,
+                    "from": current.tier,
+                    "actor": actor,
+                    "note": note,
+                },
+            )
+        )
+        return verdict
 
     async def invalidate_server(self, server: str) -> None:
         """서버의 현재 판정을 캐시에서 지워 다음 목록 요청 때 다시 검증하게 한다.
@@ -129,4 +177,9 @@ class VerificationService:
                 },
             )
         )
+        for callback in self.on_verdict:
+            try:
+                await callback(verdict)
+            except Exception as exc:
+                logger.warning("판정 알림 실패: %s", type(exc).__name__)
         return verdict

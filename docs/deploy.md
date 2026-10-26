@@ -74,11 +74,35 @@ claude mcp add --transport http linkud https://gw.example.com/mcp \
   --header "Authorization: Bearer <LINKUD_AUTH_TOKENS 중 하나>"
 ```
 
+## 5. 승인 대기 처리 (확장)
+
+**관리 API** — SSM에 `/linkud/LINKUD_ADMIN_TOKENS`를 넣으면 열린다(에이전트 토큰과 별개).
+
+```bash
+H="Authorization: Bearer <관리 토큰>"
+curl -H "$H" https://gw.example.com/admin/pending          # 승인 대기 도구와 근거
+curl -H "$H" https://gw.example.com/admin/servers          # 서버 등급
+curl -H "$H" "https://gw.example.com/admin/audit?limit=50" # 감사 로그
+curl -H "$H" -X POST https://gw.example.com/admin/decisions \
+  -d '{"server":"s","tool":"t","tool_hash":"<pending의 해시>","tier":"partial","note":"검토함"}'
+```
+
+확정은 그 정의(해시)에만 적용된다. 승인 뒤 설명이 바뀌면 다시 검증 경로를 탄다.
+
+**Slack 승인 버튼**
+1. Slack 앱을 만들고 Incoming Webhooks를 켜서 채널 웹훅 URL을 받는다 → `/linkud/SLACK_WEBHOOK_URL`
+2. Interactivity를 켜고 Request URL을 `https://gw.example.com/slack/actions`로 둔다
+3. Basic Information의 Signing Secret → `/linkud/SLACK_SIGNING_SECRET`
+4. (권장) 승인할 사람의 Slack 사용자 ID 목록 → `/linkud/SLACK_APPROVERS` (쉼표 구분)
+
+nginx 설정(`deploy/nginx/templates/linkud.conf.template`)은 `/mcp`, `/healthz`, `/admin`, `/slack/actions`만 넘긴다.
+
 ## 보안 메모
 
 - 게이트웨이는 루프백이 아닌 주소에 바인딩할 때 접속 토큰이 없으면 시작하지 않는다(fail-closed).
 - `allowed_hosts`로 Host 헤더를 검사한다(DNS 리바인딩 방지).
 - 컨테이너: 비 root(uid 10001), 읽기 전용 루트 FS, 모든 capability 제거, `no-new-privileges`.
 - 다운스트림 응답: 타임아웃(`call_timeout`)과 결과 크기 상한(`max_result_bytes`).
+- 인자 검사: 허용된 도구라도 `~/.ssh`·클라우드 자격 증명·개인키 내용 등으로 부르면 거부(값은 로그에 남기지 않음).
 - 비밀값은 SSM → `.env`(권한 600)로만 들어가고 이미지·레포·로그·판별 프롬프트에 넣지 않는다.
 - 공급망 검증용 syft는 이미지 빌드 때 릴리스 체크섬을 확인하고 설치한다. 패키지는 내려받아 풀기만 한다.

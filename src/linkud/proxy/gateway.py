@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -24,10 +25,12 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from linkud import __version__
+from linkud.admin.api import admin_routes
+from linkud.admin.slack import SlackNotifier, slack_routes
 from linkud.config import ConfigError, GatewayConfig
 from linkud.enforcement.guard import Enforcer
 from linkud.proxy import naming
-from linkud.proxy.auth import TOKENS_ENV, BearerAuth, load_tokens
+from linkud.proxy.auth import ADMIN_TOKENS_ENV, TOKENS_ENV, BearerAuth, load_tokens
 from linkud.proxy.downstream import Downstream, DownstreamUnavailable, HttpDownstream
 from linkud.store.base import Store
 from linkud.store.memory import MemoryCache
@@ -103,8 +106,10 @@ class Gateway:
         ds = self.downstreams.get(parts[0]) if parts else None
         if parts is None or ds is None:
             return _error_result(f"Unknown tool: {name}")
-        decision = await self.enforcer.check_call(ds.name, parts[1])
+        decision = await self.enforcer.check_call(ds.name, parts[1], arguments)
         if not decision.allowed:
+            if decision.reason.startswith("위험한 인자"):
+                return _error_result(f"Call blocked by Linkud gateway: dangerous argument ({name})")
             return _error_result(f"Tool not permitted by Linkud gateway: {name}")
         try:
             result = await ds.call_tool(parts[1], arguments)
@@ -203,10 +208,23 @@ def create_app(
     )
     if supply is not None:
         supply.on_update = service.invalidate_server
-    gateway = Gateway(
-        downstreams, Enforcer(service, cache, store), max_result_bytes=config.max_result_bytes
-    )
+    enforcer = Enforcer(service, cache, store, inspect_arguments=config.arg_inspection)
+    gateway = Gateway(downstreams, enforcer, max_result_bytes=config.max_result_bytes)
     server = build_server(gateway, config.name)
+
+    async def healthz(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "version": __version__})
+
+    # 관리 API·Slack 승인 (확장): 비밀값이 설정됐을 때만 연다
+    routes = [Route("/healthz", healthz)]
+    admin_tokens = load_tokens(ADMIN_TOKENS_ENV)
+    if admin_tokens:
+        routes += admin_routes(service, enforcer, store)
+    if webhook := os.environ.get("SLACK_WEBHOOK_URL"):
+        service.on_verdict.append(SlackNotifier(webhook, http).notify)
+    if signing_secret := os.environ.get("SLACK_SIGNING_SECRET"):
+        approvers = set(load_tokens("SLACK_APPROVERS")) or None
+        routes += slack_routes(service, http, signing_secret, approvers)
     security = None
     if config.allowed_hosts:
         security = TransportSecuritySettings(
@@ -215,14 +233,11 @@ def create_app(
             allowed_origins=[f"https://{h}" for h in config.allowed_hosts],
         )
 
-    async def healthz(request: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "version": __version__})
-
     app = server.streamable_http_app(
         streamable_http_path=config.path,
         host=config.host,
         transport_security=security,
-        custom_starlette_routes=[Route("/healthz", healthz)],
+        custom_starlette_routes=routes,
     )
     session_lifespan = app.router.lifespan_context
 
@@ -244,11 +259,14 @@ def create_app(
     app.state.gateway = gateway
 
     tokens = load_tokens()
-    if tokens:
-        app.add_middleware(BearerAuth, tokens=tokens)
-    elif config.host in ("127.0.0.1", "localhost", "::1"):
+    if not tokens:
+        if config.host not in ("127.0.0.1", "localhost", "::1"):
+            # 공개 주소에 인증 없이 뜨지 않는다 (fail-closed)
+            raise ConfigError(f"{config.host}에 바인딩하려면 {TOKENS_ENV} 접속 토큰이 필요함")
         logger.warning("접속 토큰 없음: 루프백 주소에서만 인증 없이 실행 (%s 미설정)", TOKENS_ENV)
-    else:
-        # 공개 주소에 인증 없이 뜨지 않는다 (fail-closed)
-        raise ConfigError(f"{config.host}에 바인딩하려면 {TOKENS_ENV} 접속 토큰이 필요함")
+    app.add_middleware(
+        BearerAuth,
+        routes={config.path: tokens or None, "/admin": admin_tokens},
+        exempt=("/healthz", "/slack/actions"),  # Slack은 자체 서명으로 검증
+    )
     return app

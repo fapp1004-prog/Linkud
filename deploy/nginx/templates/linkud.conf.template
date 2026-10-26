@@ -39,5 +39,18 @@ server {
     }
 
     location = /healthz { proxy_pass http://gateway:8000; }
+
+    # 관리 API (게이트웨이가 관리 토큰으로 따로 인증) · Slack 버튼 (서명 검증)
+    location /admin {
+        limit_req zone=mcp burst=10 nodelay;
+        proxy_pass http://gateway:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    location = /slack/actions {
+        limit_req zone=mcp burst=10 nodelay;
+        proxy_pass http://gateway:8000;
+        proxy_set_header Host $host;
+    }
     location / { return 404; }
 }
