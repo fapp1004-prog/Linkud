@@ -6,7 +6,7 @@ from linkud.config import parse_config
 from linkud.proxy.gateway import create_app
 from linkud.store.memory import MemoryStore
 from tests.fixtures.benign_servers import make_math_server, make_notes_server
-from tests.helpers import FakeDownstream, make_gateway, serve, tool
+from tests.helpers import FakeDownstream, TrustingVerifier, make_gateway, serve, tool
 
 
 async def test_aggregates_and_prefixes_tools():
@@ -55,7 +55,7 @@ async def test_end_to_end_over_http():
             }
         )
         async with (
-            serve(create_app(cfg, store=MemoryStore())) as gw_url,
+            serve(create_app(cfg, store=MemoryStore(), verifier=TrustingVerifier())) as gw_url,
             Client(f"{gw_url}/mcp", cache=None) as agent,
         ):
             names = {t.name for t in (await agent.list_tools()).tools}
@@ -86,7 +86,7 @@ async def test_unreachable_downstream_is_hidden_over_http():
             }
         )
         async with (
-            serve(create_app(cfg, store=MemoryStore())) as gw_url,
+            serve(create_app(cfg, store=MemoryStore(), verifier=TrustingVerifier())) as gw_url,
             Client(f"{gw_url}/mcp", cache=None) as agent,
         ):
             names = {t.name for t in (await agent.list_tools()).tools}

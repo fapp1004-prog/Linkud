@@ -8,6 +8,11 @@ gateway:
   call_timeout: 30      # 다운스트림 응답 대기(초)
   verify_timeout: 30    # 도구 검증 대기(초), 넘기면 숨김
   db_path: linkud.db    # 판정 이력·감사 로그 (SQLite)
+  judge: claude         # claude(ANTHROPIC_API_KEY 필요) | fake(개발용, LLM 판별 없음)
+  judge_model: claude-haiku-5-5
+  judge_timeout: 20
+  high_confidence: 0.8  # LLM '악성' 고확신 기준
+  no_supply_info: partial  # 공급망 정보 없음: partial(읽기만) | record(기록만)
 
 # 게이트웨이 뒤에 붙일 원격 HTTP MCP 서버 목록 (stdio 서버는 받지 않음)
 # 에이전트에게는 <name>__<도구이름> 으로 노출된다

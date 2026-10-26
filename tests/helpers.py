@@ -67,15 +67,34 @@ class FakeDownstream:
         return types.CallToolResult(content=[types.TextContent(type="text", text=f"{name} ok")])
 
 
+class TrustingVerifier:
+    """모든 도구를 신뢰로 판정한다 (프록시·캐시 동작만 볼 때)."""
+
+    async def verify(self, req: Any):
+        from linkud.models import Tier, ToolVerdict
+
+        return ToolVerdict(req.server, req.tool.name, req.tool_hash, Tier.TRUSTED, False, ["test"])
+
+
+def pipeline(judge: Any = None, supply: Any = None, no_supply_info: str = "record"):
+    """FakeJudge 기반 파이프라인 검증기. 기본은 공급망 정보 없음을 기록만 한다."""
+    from linkud.verify.decision import NoSupplyInfo, Policy
+    from linkud.verify.judge.fake import FakeJudge
+    from linkud.verify.pipeline import PipelineVerifier
+
+    return PipelineVerifier(
+        judge or FakeJudge(), supply, Policy(no_supply_info=NoSupplyInfo(no_supply_info))
+    )
+
+
 def make_gateway(downstreams: list[Any], verifier: Any = None, store: Any = None):
     """가짜 다운스트림으로 게이트웨이를 조립한다. (gateway, store)를 돌려준다."""
     from linkud.enforcement.guard import Enforcer
     from linkud.proxy.gateway import Gateway
     from linkud.store.memory import MemoryCache, MemoryStore
-    from linkud.verify.baseline import BaselineVerifier
     from linkud.verify.service import VerificationService
 
     cache = MemoryCache()
     store = store if store is not None else MemoryStore()
-    service = VerificationService(verifier or BaselineVerifier(), cache, store, timeout=2.0)
+    service = VerificationService(verifier or TrustingVerifier(), cache, store, timeout=2.0)
     return Gateway(downstreams, Enforcer(service, cache, store)), store

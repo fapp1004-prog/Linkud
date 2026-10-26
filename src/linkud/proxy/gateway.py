@@ -26,7 +26,9 @@ from linkud.proxy.downstream import Downstream, DownstreamUnavailable, HttpDowns
 from linkud.store.base import Store
 from linkud.store.memory import MemoryCache
 from linkud.store.sqlite import SqliteStore
-from linkud.verify.baseline import BaselineVerifier
+from linkud.verify.decision import NoSupplyInfo, Policy
+from linkud.verify.judge.base import Judge
+from linkud.verify.pipeline import PipelineVerifier, SupplyChecker
 from linkud.verify.service import VerificationService, Verifier
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,25 @@ def build_server(gateway: Gateway, name: str = "linkud-gateway") -> Server[Any]:
     )
 
 
+def make_judge(config: GatewayConfig) -> Judge:
+    if config.judge == "fake":
+        from linkud.verify.judge.fake import FakeJudge
+
+        logger.warning("FakeJudge 사용 중: 개발·테스트 전용 (LLM 판별 없음)")
+        return FakeJudge()
+    from linkud.verify.judge.anthropic import ClaudeJudge
+
+    return ClaudeJudge(config.judge_model, timeout=config.judge_timeout)
+
+
+def make_verifier(config: GatewayConfig, supply: SupplyChecker | None = None) -> Verifier:
+    policy = Policy(
+        high_confidence=config.high_confidence,
+        no_supply_info=NoSupplyInfo(config.no_supply_info),
+    )
+    return PipelineVerifier(make_judge(config), supply, policy)
+
+
 def create_app(
     config: GatewayConfig,
     *,
@@ -125,7 +146,7 @@ def create_app(
     cache = MemoryCache()
     store = store if store is not None else SqliteStore(config.db_path)
     service = VerificationService(
-        verifier if verifier is not None else BaselineVerifier(),
+        verifier if verifier is not None else make_verifier(config),
         cache,
         store,
         timeout=config.verify_timeout,

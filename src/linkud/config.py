@@ -40,6 +40,13 @@ class GatewayConfig:
     # 검증 경로 타임아웃(초). 넘기면 그 도구는 숨긴다(fail-closed)
     verify_timeout: float = 30.0
     db_path: str = "linkud.db"
+    # LLM 판별기: claude(운영) | fake(개발·테스트 전용, 모든 도구를 정상으로 판별)
+    judge: str = "claude"
+    judge_model: str = "claude-haiku-5-5"
+    judge_timeout: float = 20.0
+    # 결정 테이블 정책
+    high_confidence: float = 0.8
+    no_supply_info: str = "partial"  # partial(부분신뢰) | record(기록만)
     downstreams: list[DownstreamConfig] = field(default_factory=list)
 
 
@@ -66,7 +73,12 @@ def parse_config(data: dict[str, Any]) -> GatewayConfig:
     if len(names) != len(set(names)):
         raise ConfigError("다운스트림 이름이 중복됨")
     known = {k: gw[k] for k in GatewayConfig.__dataclass_fields__ if k in gw and k != "downstreams"}
-    return GatewayConfig(**known, downstreams=downstreams)
+    cfg = GatewayConfig(**known, downstreams=downstreams)
+    if cfg.judge not in ("claude", "fake"):
+        raise ConfigError(f"judge는 claude 또는 fake: {cfg.judge!r}")
+    if cfg.no_supply_info not in ("partial", "record"):
+        raise ConfigError(f"no_supply_info는 partial 또는 record: {cfg.no_supply_info!r}")
+    return cfg
 
 
 def load_config(path: str | Path) -> GatewayConfig:

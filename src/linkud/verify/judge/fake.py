@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from linkud.verify.judge.base import JudgeLabel, JudgeVerdict, parse_output
 
 
 class FakeJudge:
-    """도구 이름별로 정해 둔 판정을 돌려준다. 없으면 기본값.
+    """도구 이름별로 정해 둔 판정(또는 `decide` 함수 결과)을 돌려준다. 없으면 기본값.
 
     `raw`에 문자열을 주면 모델 출력처럼 `parse_output`을 거친다(파싱 실패 경로 시험용).
     """
@@ -19,11 +20,13 @@ class FakeJudge:
         by_name: dict[str, JudgeVerdict] | None = None,
         raw: str | None = None,
         error: Exception | None = None,
+        decide: Callable[[dict[str, Any]], JudgeVerdict | None] | None = None,
     ) -> None:
         self.default = default or JudgeVerdict(JudgeLabel.BENIGN, False, ["fake: benign"], 0.9)
         self.by_name = by_name or {}
         self.raw = raw
         self.error = error
+        self.decide = decide
         self.seen: list[dict[str, Any]] = []
 
     async def judge(self, definition: dict[str, Any]) -> JudgeVerdict:
@@ -32,4 +35,6 @@ class FakeJudge:
             raise self.error
         if self.raw is not None:
             return parse_output(self.raw)
+        if self.decide is not None and (verdict := self.decide(definition)) is not None:
+            return verdict
         return self.by_name.get(definition.get("name", ""), self.default)
