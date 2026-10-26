@@ -51,6 +51,8 @@ class Gateway:
     def __init__(self, downstreams: Sequence[Downstream], enforcer: Enforcer) -> None:
         self.downstreams = {d.name: d for d in downstreams}
         self.enforcer = enforcer
+        # 노출 이름 → 마지막 목록에서 에이전트에게 보여준 inputSchema
+        self._schemas: dict[str, dict[str, Any]] = {}
 
     async def _list_one(self, ds: Downstream) -> list[types.Tool]:
         try:
@@ -72,7 +74,17 @@ class Gateway:
             for ds in self.downstreams.values():
                 tg.start_soon(collect, ds)
         # 설정 순서대로 결과를 이어 붙여 응답 순서를 고정한다
-        return [t for name in self.downstreams for t in results.get(name, [])]
+        tools = [t for name in self.downstreams for t in results.get(name, [])]
+        self._schemas = {t.name: t.input_schema for t in tools}
+        return tools
+
+    def input_schema(self, name: str) -> dict[str, Any] | None:
+        """SDK의 tools/call 헤더 검증용 스키마 조회.
+
+        이 콜백이 없으면 SDK가 호출마다 tools/list 처리기를 다시 돌려 스키마를 찾는다.
+        그러면 호출 경로에서 검증 경로(LLM 판별)가 돌 수 있으므로, 마지막 목록 결과만 돌려준다.
+        """
+        return self._schemas.get(name)
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
         parts = naming.split(name)
@@ -106,6 +118,7 @@ def build_server(gateway: Gateway, name: str = "linkud-gateway") -> Server[Any]:
     return Server(
         name,
         version=__version__,
+        get_tool_input_schema=gateway.input_schema,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
     )

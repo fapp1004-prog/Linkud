@@ -92,3 +92,24 @@ async def test_unreachable_downstream_is_hidden_over_http():
             names = {t.name for t in (await agent.list_tools()).tools}
             assert names == {"math__add", "math__multiply"}
             assert (await agent.call_tool("dead__x", {})).is_error
+
+
+async def test_call_does_not_rerun_listing():
+    """tools/call이 다운스트림 목록 조회나 검증 경로를 다시 돌리지 않는다 (런타임 경로 분리)."""
+    ds = FakeDownstream(
+        "a", [tool("x", input_schema={"type": "object", "properties": {"k": {"type": "integer"}}})]
+    )
+    gw, _ = make_gateway([ds])
+    async with (
+        serve(
+            create_app(
+                parse_config({}), downstreams=[ds], store=MemoryStore(), verifier=TrustingVerifier()
+            )
+        ) as url,
+        Client(f"{url}/mcp", cache=None) as agent,
+    ):
+        await agent.list_tools()
+        before = ds.list_count
+        for _ in range(3):
+            assert not (await agent.call_tool("a__x", {"k": 1})).is_error
+        assert ds.list_count == before
