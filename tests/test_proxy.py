@@ -3,33 +3,40 @@
 from mcp import Client
 
 from linkud.config import parse_config
-from linkud.proxy.gateway import Gateway, create_app
+from linkud.proxy.gateway import create_app
+from linkud.store.memory import MemoryStore
 from tests.fixtures.benign_servers import make_math_server, make_notes_server
-from tests.helpers import FakeDownstream, serve, tool
+from tests.helpers import FakeDownstream, make_gateway, serve, tool
 
 
 async def test_aggregates_and_prefixes_tools():
-    gw = Gateway([FakeDownstream("a", [tool("x")]), FakeDownstream("b", [tool("x"), tool("y")])])
+    gw, _ = make_gateway(
+        [FakeDownstream("a", [tool("x")]), FakeDownstream("b", [tool("x"), tool("y")])]
+    )
     names = [t.name for t in await gw.list_tools()]
     assert names == ["a__x", "b__x", "b__y"]
 
 
 async def test_routes_call_to_owning_downstream():
     a, b = FakeDownstream("a", [tool("x")]), FakeDownstream("b", [tool("x")])
-    gw = Gateway([a, b])
+    gw, _ = make_gateway([a, b])
+    await gw.list_tools()
     result = await gw.call_tool("b__x", {"k": 1})
     assert not result.is_error
     assert b.calls == [("x", {"k": 1})] and a.calls == []
 
 
 async def test_unknown_tool_is_error():
-    gw = Gateway([FakeDownstream("a", [tool("x")])])
+    gw, _ = make_gateway([FakeDownstream("a", [tool("x")])])
+    await gw.list_tools()
     for name in ["nope", "zz__x", "a__"]:
         assert (await gw.call_tool(name, None)).is_error
 
 
 async def test_failed_downstream_hides_its_tools():
-    gw = Gateway([FakeDownstream("a", [tool("x")], fail=True), FakeDownstream("b", [tool("y")])])
+    gw, _ = make_gateway(
+        [FakeDownstream("a", [tool("x")], fail=True), FakeDownstream("b", [tool("y")])]
+    )
     assert [t.name for t in await gw.list_tools()] == ["b__y"]
 
 
@@ -47,7 +54,10 @@ async def test_end_to_end_over_http():
                 ]
             }
         )
-        async with serve(create_app(cfg)) as gw_url, Client(f"{gw_url}/mcp", cache=None) as agent:
+        async with (
+            serve(create_app(cfg, store=MemoryStore())) as gw_url,
+            Client(f"{gw_url}/mcp", cache=None) as agent,
+        ):
             names = {t.name for t in (await agent.list_tools()).tools}
             assert {
                 "math__add",
@@ -75,7 +85,10 @@ async def test_unreachable_downstream_is_hidden_over_http():
                 ],
             }
         )
-        async with serve(create_app(cfg)) as gw_url, Client(f"{gw_url}/mcp", cache=None) as agent:
+        async with (
+            serve(create_app(cfg, store=MemoryStore())) as gw_url,
+            Client(f"{gw_url}/mcp", cache=None) as agent,
+        ):
             names = {t.name for t in (await agent.list_tools()).tools}
             assert names == {"math__add", "math__multiply"}
             assert (await agent.call_tool("dead__x", {})).is_error

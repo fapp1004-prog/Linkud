@@ -65,3 +65,17 @@ class FakeDownstream:
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
         self.calls.append((name, arguments))
         return types.CallToolResult(content=[types.TextContent(type="text", text=f"{name} ok")])
+
+
+def make_gateway(downstreams: list[Any], verifier: Any = None, store: Any = None):
+    """가짜 다운스트림으로 게이트웨이를 조립한다. (gateway, store)를 돌려준다."""
+    from linkud.enforcement.guard import Enforcer
+    from linkud.proxy.gateway import Gateway
+    from linkud.store.memory import MemoryCache, MemoryStore
+    from linkud.verify.baseline import BaselineVerifier
+    from linkud.verify.service import VerificationService
+
+    cache = MemoryCache()
+    store = store if store is not None else MemoryStore()
+    service = VerificationService(verifier or BaselineVerifier(), cache, store, timeout=2.0)
+    return Gateway(downstreams, Enforcer(service, cache, store)), store

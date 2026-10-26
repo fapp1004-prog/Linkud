@@ -11,3 +11,6 @@ dist/
 config.yaml
 .env
 *.pem
+
+# 로컬 DB
+*.db

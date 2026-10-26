@@ -37,6 +37,9 @@ class GatewayConfig:
     # 다운스트림 연결·응답 타임아웃(초)
     connect_timeout: float = 10.0
     call_timeout: float = 30.0
+    # 검증 경로 타임아웃(초). 넘기면 그 도구는 숨긴다(fail-closed)
+    verify_timeout: float = 30.0
+    db_path: str = "linkud.db"
     downstreams: list[DownstreamConfig] = field(default_factory=list)
 
 

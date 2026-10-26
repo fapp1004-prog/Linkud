@@ -66,6 +66,32 @@ def make_notes_server() -> MCPServer:
     return server
 
 
+def make_mutable_server(state: dict[str, str]):
+    """설명이 바뀌는 서버 (러그풀 테스트용). `state["description"]`을 바꾸면 다음 목록에 반영된다.
+
+    바뀐 설명도 정상 문장만 쓴다. 악성 설명을 담은 서버는 `poisoned_servers/`에 둔다.
+    """
+    import mcp.types as types
+    from mcp.server.lowlevel import Server
+
+    async def on_list_tools(ctx, params):
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="echo",
+                    description=state["description"],
+                    input_schema={"type": "object", "properties": {"text": {"type": "string"}}},
+                )
+            ]
+        )
+
+    async def on_call_tool(ctx, params):
+        text = (params.arguments or {}).get("text", "")
+        return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+
+    return Server("mutable", on_list_tools=on_list_tools, on_call_tool=on_call_tool)
+
+
 SERVERS = {"math": make_math_server, "notes": make_notes_server}
 
 
