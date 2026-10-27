@@ -34,6 +34,7 @@ from linkud.proxy.auth import ADMIN_TOKENS_ENV, TOKENS_ENV, BearerAuth, load_tok
 from linkud.proxy.downstream import Downstream, DownstreamUnavailable, HttpDownstream
 from linkud.store.base import Store
 from linkud.store.memory import MemoryCache
+from linkud.store.retention import purge_once
 from linkud.store.sqlite import SqliteStore
 from linkud.verify.decision import NoSupplyInfo, Policy
 from linkud.verify.judge.base import Judge
@@ -145,6 +146,14 @@ def build_server(gateway: Gateway, name: str = "linkud-gateway") -> Server[Any]:
     )
 
 
+async def retention_loop(store: Store, retention_days: float) -> None:
+    """시작 시 정리는 lifespan에서 했으니 한 주기 뒤부터 반복한다."""
+    from linkud.store.retention import run_retention
+
+    await anyio.sleep(3600)
+    await run_retention(store, retention_days)
+
+
 def make_judge(config: GatewayConfig) -> Judge:
     if config.judge == "fake":
         from linkud.verify.judge.fake import FakeJudge
@@ -248,6 +257,8 @@ def create_app(
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         await service.warm()
         async with anyio.create_task_group() as tg:
+            await purge_once(store, config.audit_retention_days)
+            tg.start_soon(retention_loop, store, config.audit_retention_days)
             for ds in downstreams:
                 if isinstance(ds, HttpDownstream):
                     tg.start_soon(ds.run)
@@ -256,6 +267,7 @@ def create_app(
             for ds in downstreams:
                 if isinstance(ds, HttpDownstream):
                     ds.stop()
+            tg.cancel_scope.cancel()  # 보존 정리 루프 등 남은 백그라운드 작업 종료
         await http.aclose()
 
     app.router.lifespan_context = lifespan

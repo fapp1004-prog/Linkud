@@ -8,6 +8,7 @@ gateway:
   call_timeout: 30      # 다운스트림 응답 대기(초)
   verify_timeout: 30    # 도구 검증 대기(초), 넘기면 숨김
   db_path: linkud.db    # 판정 이력·감사 로그 (SQLite)
+  audit_retention_days: 90  # 감사 로그 보존 기간(일), 0이면 정리 안 함
   judge: claude         # claude(ANTHROPIC_API_KEY 필요) | fake(개발용, LLM 판별 없음)
   judge_model: claude-haiku-5-5
   judge_timeout: 20

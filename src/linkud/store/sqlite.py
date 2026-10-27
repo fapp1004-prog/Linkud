@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS audit (
     tool TEXT NOT NULL,
     detail TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
 """
 
 
@@ -121,3 +122,10 @@ class SqliteStore:
                 (limit,),
             ).fetchall()
         return [AuditEvent(r[0], r[1], r[2], json.loads(r[3]), r[4]) for r in rows]
+
+    async def purge_audit(self, before: float) -> int:
+        return await anyio.to_thread.run_sync(self._purge_audit, before)
+
+    def _purge_audit(self, before: float) -> int:
+        with self._lock, self._conn:
+            return self._conn.execute("DELETE FROM audit WHERE ts < ?", (before,)).rowcount

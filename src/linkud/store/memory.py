@@ -45,3 +45,9 @@ class MemoryStore:
 
     async def audit_log(self, limit: int = 100) -> list[AuditEvent]:
         return list(reversed(self.events))[:limit]
+
+    async def purge_audit(self, before: float) -> int:
+        kept = [e for e in self.events if e.ts >= before]
+        removed = len(self.events) - len(kept)
+        self.events = kept
+        return removed

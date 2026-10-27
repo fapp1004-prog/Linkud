@@ -42,6 +42,8 @@ class GatewayConfig:
     # 검증 경로 타임아웃(초). 넘기면 그 도구는 숨긴다(fail-closed)
     verify_timeout: float = 30.0
     db_path: str = "linkud.db"
+    # 감사 로그 보존 기간(일). 지난 행은 시작 시와 1시간마다 지운다. 0이면 정리하지 않음
+    audit_retention_days: float = 90.0
     # LLM 판별기: claude(운영) | fake(개발·테스트 전용, 모든 도구를 정상으로 판별)
     judge: str = "claude"
     judge_model: str = "claude-haiku-5-5"
