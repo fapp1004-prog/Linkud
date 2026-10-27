@@ -76,3 +76,14 @@ def test_base_images_pinned_by_digest(path):
     assert images
     for line, img in images:
         assert DIGEST.fullmatch(img), f"다이제스트 고정 아님: {line.strip()}"
+
+
+def test_oidc_deploy_workflow_uses_short_lived_credentials():
+    import yaml
+
+    text = (ROOT / ".github" / "workflows" / "deploy-oidc.yml").read_text()
+    wf = yaml.safe_load(text)
+    assert wf["permissions"]["id-token"] == "write"
+    assert "aws-actions/configure-aws-credentials@" in text
+    assert "AWS_ACCESS_KEY_ID" not in text and "AWS_SECRET_ACCESS_KEY" not in text  # 장기 키 없음
+    assert "ssm send-command" in text  # 22번 SSH 없이 SSM Run Command로 배포

@@ -180,6 +180,68 @@ curl -H "$H" -X POST https://gw.example.com/admin/decisions \
 
 nginx 설정(`deploy/nginx/templates/linkud.conf.template`)은 `/mcp`, `/healthz`, `/admin`, `/slack/actions`만 넘긴다.
 
+## 6. 대안: GitHub OIDC + SSM Run Command 배포 (`deploy-oidc.yml`)
+
+> **검증하지 않음.** 이 워크플로와 아래 정책은 문서와 AWS CLI 형식에 맞춰 작성했지만 실제 AWS 계정에서
+> 동작을 확인하지 않았다. 처음 쓸 때는 시험용 인스턴스에서 먼저 돌려 본다.
+
+SSH 키·22번 포트·장기 AWS 액세스 키 없이 배포한다. GitHub이 발급한 OIDC 토큰으로 IAM 역할을 잠시
+맡고(임시 자격 증명), SSM Run Command로 인스턴스에서 `deploy.sh`를 실행한다. 배포 파일은 압축해 명령에
+실어 보낸다. 수동 실행(`workflow_dispatch`)이며 `main` 브랜치에서만 돈다.
+
+**1. OIDC 공급자 (계정에 한 번)**
+```bash
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com
+```
+
+**2. 배포 역할의 신뢰 정책** — `sub`를 이 레포의 `main` 브랜치로 고정한다(다른 브랜치·PR·포크는 맡을 수 없음).
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"Federated": "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com"},
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:fapp1004-prog/Linkud:ref:refs/heads/main"
+      }
+    }
+  }]
+}
+```
+`StringLike`와 와일드카드(`repo:fapp1004-prog/Linkud:*`)는 쓰지 않는다. 그러면 모든 브랜치·PR이 역할을 맡을 수 있다.
+GitHub Environment로 승인 단계를 두려면 sub가 `repo:fapp1004-prog/Linkud:environment:<이름>` 형식으로 바뀌므로
+신뢰 정책도 그에 맞춘다.
+
+**3. 배포 역할의 권한 정책** — 이 인스턴스에 `AWS-RunShellScript`를 보내고 결과를 읽는 것만 허용한다.
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": "ssm:SendCommand",
+     "Resource": ["arn:aws:ssm:<region>::document/AWS-RunShellScript",
+                  "arn:aws:ec2:<region>:<account>:instance/<i-...>"]},
+    {"Effect": "Allow", "Action": ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"], "Resource": "*"}
+  ]
+}
+```
+인스턴스 쪽에는 1-2의 `AmazonSSMManagedInstanceCore`가 필요하다.
+
+**4. GitHub 시크릿**
+
+| 이름 | 값 |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | 위 역할 ARN |
+| `AWS_REGION` | 예: `ap-northeast-2` |
+| `EC2_INSTANCE_ID` | `i-...` |
+| `LINKUD_DOMAIN` | `gw.example.com` |
+
+Actions 탭에서 **Deploy (OIDC + SSM)** 를 수동 실행한다. 이미지를 비우면 `ghcr.io/<owner>/linkud:latest`를 배포한다.
+이 방식으로 옮기면 `deploy.yml`의 SSH 배포 단계(`EC2_HOST` 등 시크릿)는 지운다.
+
 ## 보안 메모
 
 - 게이트웨이는 루프백이 아닌 주소에 바인딩할 때 접속 토큰이 없으면 시작하지 않는다(fail-closed).
