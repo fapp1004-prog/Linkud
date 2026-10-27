@@ -48,6 +48,9 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: linkud:ci
+          # 취약점만 본다. 비밀값 스캐너는 anthropic SDK 문서 문자열의 예시
+          # '"type": "service_account"'를 GCP 서비스 계정 키로 오탐한다(실제 비밀값 아님)
+          scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"

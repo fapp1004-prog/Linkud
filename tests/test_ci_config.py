@@ -87,3 +87,12 @@ def test_oidc_deploy_workflow_uses_short_lived_credentials():
     assert "aws-actions/configure-aws-credentials@" in text
     assert "AWS_ACCESS_KEY_ID" not in text and "AWS_SECRET_ACCESS_KEY" not in text  # 장기 키 없음
     assert "ssm send-command" in text  # 22번 SSH 없이 SSM Run Command로 배포
+
+
+def test_image_scan_targets_vulnerabilities():
+    import yaml
+
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    trivy = next(s for s in ci["jobs"]["image-scan"]["steps"] if "trivy-action" in s.get("uses", ""))
+    # 서드파티 패키지 문서 문자열의 예시 값이 비밀값으로 잡히는 오탐을 피하려고 취약점만 본다
+    assert trivy["with"]["scanners"] == "vuln"

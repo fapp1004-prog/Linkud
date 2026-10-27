@@ -14,7 +14,8 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
 # 공급망 검증용 syft: 릴리스 체크섬을 확인하고 설치한다
-ARG SYFT_VERSION=1.18.1
+# 1.18.1은 오래된 Go 표준 라이브러리로 빌드돼 crypto/tls CVE가 Trivy에 잡혀 최신으로 올림
+ARG SYFT_VERSION=1.55.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && cd /tmp \
