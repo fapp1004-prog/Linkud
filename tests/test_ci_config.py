@@ -24,3 +24,13 @@ def test_actions_pinned_to_full_sha(path):
         )
         assert re.search(r"#\s*v\d", rest), f"{path.name}: 버전 태그 주석 없음: {line.strip()}"
     assert found
+
+
+def test_dependabot_covers_actions_and_python():
+    import yaml
+
+    cfg = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())
+    assert cfg["version"] == 2
+    ecosystems = {u["package-ecosystem"] for u in cfg["updates"]}
+    assert {"github-actions", "uv"} <= ecosystems
+    assert all(u.get("schedule", {}).get("interval") for u in cfg["updates"])
