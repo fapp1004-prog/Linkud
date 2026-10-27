@@ -53,6 +53,16 @@ def _tgz(files: dict[str, bytes]) -> bytes:
 TARBALL = _tgz({"package/package.json": b'{"name": "x", "scripts": {"postinstall": "evil"}}'})
 
 
+def _sri(data: bytes) -> str:
+    import base64
+    import hashlib
+
+    return "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+
+TARBALL_INTEGRITY = _sri(TARBALL)
+
+
 class FakeSbom:
     def __init__(self, components=None, fail=False):
         self.components = (
@@ -68,7 +78,9 @@ class FakeSbom:
         return self.components
 
 
-def make_transport(vulns_by_purl=None, details=None, registry_status=200, calls=None):
+def make_transport(
+    vulns_by_purl=None, details=None, registry_status=200, calls=None, integrity=TARBALL_INTEGRITY
+):
     vulns_by_purl = vulns_by_purl or {}
     details = details or {}
 
@@ -81,9 +93,10 @@ def make_transport(vulns_by_purl=None, details=None, registry_status=200, calls=
                 return httpx.Response(registry_status)
             return httpx.Response(200, json=REGISTRY_DOC)
         if url == "https://registry.npmjs.org/@achromat-ai/mcp-server/0.1.2":
-            return httpx.Response(
-                200, json={"dist": {"tarball": "https://registry.npmjs.org/t.tgz"}}
-            )
+            dist = {"tarball": "https://registry.npmjs.org/t.tgz"}
+            if integrity is not None:
+                dist["integrity"] = integrity
+            return httpx.Response(200, json={"dist": dist})
         if url == "https://registry.npmjs.org/t.tgz":
             return httpx.Response(200, content=TARBALL)
         if url == "https://api.osv.dev/v1/querybatch":
@@ -376,3 +389,86 @@ async def test_checker_end_to_end_through_pipeline():
     verdict = store.verdicts[-1]
     assert verdict.tier is Tier.UNTRUSTED
     assert any("MAL-9" in r for r in verdict.reasons)
+
+
+# --- 3-1: 다운로드 무결성 검증 ------------------------------------------------------
+
+
+async def test_npm_integrity_mismatch_is_tampering():
+    sbom = FakeSbom()
+    checker = make_checker(make_transport(integrity=_sri(b"something else")), sbom)
+    signals = await checker.check("s")
+    assert signals.tampering and not signals.available
+    assert any("공급망 조작 의심" in r for r in signals.reasons)
+    assert sbom.dirs == []  # 조작 의심 패키지는 풀지도 않는다
+
+
+async def test_missing_integrity_metadata_is_no_info_not_tampering():
+    signals = await make_checker(make_transport(integrity=None)).check("s")
+    assert not signals.tampering and not signals.available
+    assert any("무결성 정보 없음" in r for r in signals.reasons)
+
+
+async def test_correct_integrity_passes():
+    signals = await make_checker(make_transport()).check("s")
+    assert signals.available and not signals.tampering
+
+
+def _pypi_transport(wheel: bytes, sha256: str):
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "https://pypi.org/pypi/demo/1.0/json":
+            return httpx.Response(
+                200,
+                json={
+                    "urls": [
+                        {
+                            "packagetype": "bdist_wheel",
+                            "url": "https://files.example/demo.whl",
+                            "digests": {"sha256": sha256},
+                        }
+                    ]
+                },
+            )
+        if url == "https://files.example/demo.whl":
+            return httpx.Response(200, content=wheel)
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def _wheel() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("demo/__init__.py", "")
+    return buf.getvalue()
+
+
+async def test_pypi_sha256_checked(tmp_path):
+    import hashlib
+
+    from linkud.verify.supply.packages import IntegrityMismatch, fetch_package
+
+    wheel = _wheel()
+    pkg = Package("pypi", "demo", "1.0")
+    good = httpx.AsyncClient(transport=_pypi_transport(wheel, hashlib.sha256(wheel).hexdigest()))
+    await fetch_package(good, pkg, tmp_path / "ok")
+    assert (tmp_path / "ok" / "demo" / "__init__.py").exists()
+
+    bad = httpx.AsyncClient(transport=_pypi_transport(wheel, "0" * 64))
+    with pytest.raises(IntegrityMismatch):
+        await fetch_package(bad, pkg, tmp_path / "bad")
+    assert not (tmp_path / "bad").exists()
+
+
+async def test_tampering_makes_tool_pending():
+    gw, store = make_gateway(
+        [FakeDownstream("s", [tool("get_x", "Get x.")])],
+        verifier=pipeline(
+            supply=StaticSupply(SupplySignals(tampering=True, reasons=["공급망 조작 의심: x"]))
+        ),
+    )
+    assert await gw.list_tools() == []
+    verdict = store.verdicts[-1]
+    assert verdict.tier is Tier.PENDING
+    assert any("공급망 조작 의심" in r for r in verdict.reasons)

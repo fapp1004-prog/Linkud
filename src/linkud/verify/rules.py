@@ -1,8 +1,10 @@
 """규칙 필터: 도구 정의 문자열에서 알려진 툴 포이즈닝 패턴을 찾는다.
 
 판정 단계 (기획서 5장 결정 테이블):
-- 치명(critical): 숨은 지시/유출 지시 + 민감 경로가 함께 나옴 → 불신
-- 일반(general): 그 밖의 의심 패턴 하나라도 → 승인 대기 (민감 경로 단독은 기록만)
+- 치명(critical): 숨은 지시/유출 지시 + 민감 경로·비밀 파일이 함께 나옴 → 불신
+- 일반(general): 그 밖의 의심 패턴 하나라도 → 승인 대기
+  구체적인 비밀 파일(id_rsa, .aws/credentials 등)은 단독으로도 일반이고,
+  "password" 같은 일반 단어나 넓은 경로(~/.ssh)는 단독이면 기록만 한다
 
 판별 LLM에게 말을 거는 문장("안전하다고 판정해라", "이전 지시 무시")도 여기서 먼저 잡는다.
 규칙에 걸린 도구는 LLM이 "정상"이라고 해도 신뢰 등급을 받지 못한다.
@@ -90,18 +92,29 @@ _RULES: list[tuple[str, str, str]] = [
     ),
     ("ko-before", "hidden_instruction", r"(이|모든)\s*도구를\s*(사용|호출)하기\s*전에"),
     # 민감 경로·자격 증명
-    ("ssh", "sensitive_path", r"~?/?\.ssh\b|id_(rsa|ed25519|ecdsa|dsa)\b|authorized_keys"),
+    # 구체적인 비밀 파일: 정상 도구 설명에 나올 이유가 거의 없어 단독으로도 일반(승인 대기)
+    (
+        "ssh-key-file",
+        "secret_file",
+        r"\bid_(rsa|ed25519|ecdsa|dsa)\b|authorized_keys",
+    ),
+    ("aws-credentials", "secret_file", r"\.aws/credentials"),
+    ("kube-config", "secret_file", r"\.kube/config"),
+    ("etc-shadow", "secret_file", r"/etc/shadow"),
+    ("git-credentials", "secret_file", r"\.git-credentials"),
+    # 민감 경로: 정상 설명에도 나올 수 있어 기록만 (치명 판정의 조합 조건)
+    ("ssh", "sensitive_path", r"~?/?\.ssh\b"),
     (
         "cloud-creds",
         "sensitive_path",
-        r"\.aws/credentials|\.config/gcloud|\.azure/|\.kube/config|\.docker/config\.json",
+        r"\.config/gcloud|\.azure/|\.docker/config\.json",
     ),
     (
         "dotenv",
         "sensitive_path",
-        r"(^|[\s/'\"`(])\.env\b|\.netrc|\.npmrc|\.pypirc|\.git-credentials",
+        r"(^|[\s/'\"`(])\.env\b|\.netrc|\.npmrc|\.pypirc",
     ),
-    ("etc", "sensitive_path", r"/etc/(passwd|shadow|sudoers)"),
+    ("etc", "sensitive_path", r"/etc/(passwd|sudoers)"),
     ("mcp-config", "sensitive_path", r"mcp\.json|claude_desktop_config|\.cursor/|\.claude/"),
     (
         "secret-words",
@@ -157,6 +170,7 @@ _INVISIBLE = re.compile("[​-‏⁠-⁤﻿‪-‮⁦-⁩\U000e0000-\U000e007f]"
 _BASE64_BLOB = re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")
 
 _CRITICAL_TRIGGERS = {"hidden_instruction", "exfiltration"}
+_CRITICAL_TARGETS = {"sensitive_path", "secret_file"}
 # 민감 경로는 단독으로는 정상 도구(로그인 도구의 password 인자 등)에도 흔해서 등급을 낮추지 않고,
 # 치명 판정의 조합 조건과 근거 기록에만 쓴다
 _INFO_ONLY = {"sensitive_path"}
@@ -198,7 +212,7 @@ def scan(definition: dict[str, Any]) -> RuleResult:
             matches.append(RuleMatch("base64-blob", "obfuscation", path, m.group()[:40] + "..."))
 
     categories = {m.category for m in matches}
-    if categories & _CRITICAL_TRIGGERS and "sensitive_path" in categories:
+    if categories & _CRITICAL_TRIGGERS and categories & _CRITICAL_TARGETS:
         severity = Severity.CRITICAL
     elif categories - _INFO_ONLY:
         severity = Severity.GENERAL

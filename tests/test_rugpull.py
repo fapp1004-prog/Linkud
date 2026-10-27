@@ -50,12 +50,42 @@ async def test_changed_description_is_hidden_and_call_denied():
     assert any("재검증" in r for r in changed.reasons)
 
 
-async def test_benign_change_is_reverified_and_shown():
+async def test_benign_change_requires_reapproval():
+    """1-2: 이전 판정이 있던 도구의 정의가 바뀌면 새 판정이 신뢰여도 승인 대기로 올린다.
+
+    (예전 동작: 정상 문장으로 바뀌면 재검증 후 바로 다시 보였다 → 정책 변경으로 의도적으로 수정)
+    """
     ds = FakeDownstream("s", [tool("echo", "Echo the text back.")])
-    gw, _ = make_gateway([ds], verifier=pipeline())
+    gw, store = make_gateway([ds], verifier=pipeline())
+    assert [t.name for t in await gw.list_tools()] == ["s__echo"]
+    ds.tools[0] = tool("echo", "Echo the given text back unchanged.")
+    assert await gw.list_tools() == []
+    changed = store.verdicts[-1]
+    assert changed.tier.value == "pending"
+    assert any("재승인" in r for r in changed.reasons)
+    assert changed.details["decision_tier"] == "trusted"  # 결정 테이블 자체 결과는 남긴다
+
+
+async def test_benign_change_shown_when_reapproval_disabled():
+    ds = FakeDownstream("s", [tool("echo", "Echo the text back.")])
+    gw, _ = make_gateway([ds], verifier=pipeline(reapprove_on_change=False))
     await gw.list_tools()
     ds.tools[0] = tool("echo", "Echo the given text back unchanged.")
     assert [t.name for t in await gw.list_tools()] == ["s__echo"]
+
+
+async def test_first_seen_tool_does_not_need_reapproval():
+    gw, _ = make_gateway([FakeDownstream("s", [tool("echo", "Echo.")])], verifier=pipeline())
+    assert [t.name for t in await gw.list_tools()] == ["s__echo"]
+
+
+async def test_reapprove_on_change_config():
+    from linkud.config import parse_config
+    from linkud.proxy.gateway import make_verifier
+
+    assert make_verifier(parse_config({"gateway": {"judge": "fake"}})).policy.reapprove_on_change
+    off = parse_config({"gateway": {"judge": "fake", "reapprove_on_change": False}})
+    assert make_verifier(off).policy.reapprove_on_change is False
 
 
 async def test_call_without_listing_is_denied():

@@ -1,6 +1,7 @@
 """SQLite 저장소.
 
-호출이 짧고 로컬 디스크라 동기 sqlite3를 락으로 감싸 쓴다. 부하가 커지면
+동기 sqlite3 호출은 `anyio.to_thread.run_sync`로 작업 스레드에 넘겨 이벤트 루프를 막지 않는다.
+연결 하나를 여러 스레드가 나눠 쓰므로 `threading.Lock`으로 직렬화한다. 부하가 커지면
 PostgreSQL 구현으로 바꾼다(`Store` 인터페이스 유지).
 """
 
@@ -11,6 +12,8 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+
+import anyio
 
 from linkud.models import Tier, ToolVerdict
 from linkud.store.base import AuditEvent
@@ -36,6 +39,7 @@ CREATE TABLE IF NOT EXISTS audit (
     tool TEXT NOT NULL,
     detail TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
 """
 
 
@@ -50,6 +54,9 @@ class SqliteStore:
         self._conn.close()
 
     async def save_verdict(self, verdict: ToolVerdict) -> None:
+        await anyio.to_thread.run_sync(self._save_verdict, verdict)
+
+    def _save_verdict(self, verdict: ToolVerdict) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO verdicts (server, tool, tool_hash, tier, is_read, reasons, details, created_at)"
@@ -67,6 +74,9 @@ class SqliteStore:
             )
 
     async def latest_verdicts(self) -> list[ToolVerdict]:
+        return await anyio.to_thread.run_sync(self._latest_verdicts)
+
+    def _latest_verdicts(self) -> list[ToolVerdict]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT server, tool, tool_hash, tier, is_read, reasons, details, created_at"
@@ -87,6 +97,9 @@ class SqliteStore:
         ]
 
     async def log(self, event: AuditEvent) -> None:
+        await anyio.to_thread.run_sync(self._log, event)
+
+    def _log(self, event: AuditEvent) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO audit (ts, kind, server, tool, detail) VALUES (?, ?, ?, ?, ?)",
@@ -100,9 +113,19 @@ class SqliteStore:
             )
 
     async def audit_log(self, limit: int = 100) -> list[AuditEvent]:
+        return await anyio.to_thread.run_sync(self._audit_log, limit)
+
+    def _audit_log(self, limit: int) -> list[AuditEvent]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT kind, server, tool, detail, ts FROM audit ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [AuditEvent(r[0], r[1], r[2], json.loads(r[3]), r[4]) for r in rows]
+
+    async def purge_audit(self, before: float) -> int:
+        return await anyio.to_thread.run_sync(self._purge_audit, before)
+
+    def _purge_audit(self, before: float) -> int:
+        with self._lock, self._conn:
+            return self._conn.execute("DELETE FROM audit WHERE ts < ?", (before,)).rowcount

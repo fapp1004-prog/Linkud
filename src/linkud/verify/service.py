@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -38,12 +39,29 @@ class Verifier(Protocol):
 
 
 class VerificationService:
-    def __init__(self, verifier: Verifier, cache: Cache, store: Store, *, timeout: float = 30.0):
+    def __init__(
+        self,
+        verifier: Verifier,
+        cache: Cache,
+        store: Store,
+        *,
+        timeout: float = 30.0,
+        reverify_limit: int = 30,
+        reverify_window: float = 600.0,
+    ):
         self.verifier = verifier
         self.cache = cache
         self.store = store
         self.timeout = timeout
-        self._locks: dict[str, anyio.Lock] = {}
+        # 자원 고갈 방어: 서버가 처음 목록을 낸 뒤 reverify_window초 안에 재검증(정의 변경·새 도구)이
+        # reverify_limit번을 넘으면 그 서버를 승인 대기로 묶고 더는 검증기(LLM)를 부르지 않는다
+        self.reverify_limit = reverify_limit
+        self.reverify_window = reverify_window
+        self._reverify_times: dict[str, deque[float]] = {}
+        self._known_servers: set[str] = set()
+        self._throttled: dict[str, float] = {}  # 서버 → 묶인 시각 (사람이 풀 때까지 유지)
+        # 해시 키 → [락, 대기·보유 중인 요청 수]. 0이 되면 지워 무한히 커지지 않게 한다
+        self._locks: dict[str, list] = {}
         # (서버, 도구 이름) → 가장 최근 판정. 정의 변경(러그풀) 감지 기록용
         self._latest_by_name: dict[tuple[str, str], ToolVerdict] = {}
         # 새 판정이 나올 때 부르는 콜백 (Slack 알림 등). 실패해도 판정에는 영향 없음
@@ -54,6 +72,41 @@ class VerificationService:
         for v in sorted(await self.store.latest_verdicts(), key=lambda v: v.created_at):
             await self.cache.set(verdict_key(v.server, v.tool_hash), v)
             self._latest_by_name[(v.server, v.tool)] = v
+            self._known_servers.add(v.server)
+
+    def is_throttled(self, server: str) -> bool:
+        return server in self._throttled
+
+    async def release(self, server: str, *, actor: str) -> None:
+        """재검증 상한으로 묶인 서버를 사람이 푼다. 횟수 기록도 비운다."""
+        self._throttled.pop(server, None)
+        self._reverify_times.pop(server, None)
+        await self.store.log(AuditEvent("reverify_released", server, "*", {"actor": actor}))
+
+    async def _allow_reverify(self, server: str, tool: str) -> bool:
+        """재검증 한 번을 쓸 수 있는가. 처음 목록을 낸 서버의 검증은 세지 않는다."""
+        if server in self._throttled:
+            return False
+        if server not in self._known_servers:
+            return True
+        now = time.monotonic()
+        times = self._reverify_times.setdefault(server, deque())
+        while times and now - times[0] > self.reverify_window:
+            times.popleft()
+        if len(times) >= self.reverify_limit:
+            self._throttled[server] = time.time()
+            logger.warning("재검증 상한 초과: %s", server)
+            await self.store.log(
+                AuditEvent(
+                    "reverify_limited",
+                    server,
+                    tool,
+                    {"limit": self.reverify_limit, "window_seconds": self.reverify_window},
+                )
+            )
+            return False
+        times.append(now)
+        return True
 
     def pending(self) -> list[ToolVerdict]:
         """현재 정의 기준으로 승인 대기인 도구들."""
@@ -107,6 +160,8 @@ class VerificationService:
         for (srv, _), verdict in list(self._latest_by_name.items()):
             if srv == server:
                 await self.cache.delete(verdict_key(server, verdict.tool_hash))
+        # 내부 사유로 다시 검증하는 것이라 재검증 상한에 세지 않는다
+        self._known_servers.discard(server)
         await self.store.log(AuditEvent("reverify_requested", server, "*", {}))
 
     async def verdicts(
@@ -121,6 +176,7 @@ class VerificationService:
         async with anyio.create_task_group() as tg:
             for tool in tools:
                 tg.start_soon(one, tool)
+        self._known_servers.add(server)
         return results
 
     async def verdict_for(self, server: str, tool: types.Tool) -> ToolVerdict | None:
@@ -128,12 +184,20 @@ class VerificationService:
         key = verdict_key(server, h)
         if (cached := await self.cache.get(key)) is not None:
             return cached
-        lock = self._locks.setdefault(key, anyio.Lock())
-        async with lock:
-            # 락을 기다리는 동안 다른 요청이 검증을 끝냈을 수 있다
-            if (cached := await self.cache.get(key)) is not None:
-                return cached
-            return await self._verify(server, tool, h, key)
+        entry = self._locks.setdefault(key, [anyio.Lock(), 0])
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                # 락을 기다리는 동안 다른 요청이 검증을 끝냈을 수 있다
+                if (cached := await self.cache.get(key)) is not None:
+                    return cached
+                if not await self._allow_reverify(server, tool.name):
+                    return None  # 상한 초과: 검증하지 않고 숨긴다(fail-closed)
+                return await self._verify(server, tool, h, key)
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                self._locks.pop(key, None)
 
     async def _verify(self, server: str, tool: types.Tool, h: str, key: str) -> ToolVerdict | None:
         previous = self._latest_by_name.get((server, tool.name))

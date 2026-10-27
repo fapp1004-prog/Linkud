@@ -12,11 +12,16 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # 자원 제한: 다운스트림·요청 폭주로 호스트(t3.small, 2 vCPU·2GB) 전체가 멈추지 않게
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 256
     expose: ["8000"]
     logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
 
   nginx:
-    image: nginx:1.27-alpine
+    # nginx:1.27-alpine (다이제스트 고정, 2026-10-27 기준)
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:?DOMAIN 필요}
@@ -30,7 +35,8 @@ services:
     depends_on: [gateway]
 
   certbot:
-    image: certbot/certbot:v2.11.0
+    # certbot/certbot:v2.11.0 (다이제스트 고정, 2026-10-27 기준)
+    image: certbot/certbot:v2.11.0@sha256:ddf9e5d226a56e886986838fa0ebedc0237511c78664352e8d0f4346ee022cd8
     restart: unless-stopped
     volumes:
       - certbot-www:/var/www/certbot

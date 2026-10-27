@@ -7,6 +7,7 @@
     GET  /admin/servers                 서버 등급
     GET  /admin/audit?limit=100         감사 로그
     POST /admin/decisions               {"server", "tool", "tool_hash", "tier", "note"?}
+    POST /admin/servers/{name}/release  재검증 상한으로 묶인 서버 해제
 """
 
 from __future__ import annotations
@@ -84,7 +85,15 @@ def admin_routes(service: VerificationService, enforcer: Enforcer, store: Store)
             return JSONResponse({"error": str(exc)}, status_code=409)
         return JSONResponse(verdict_json(verdict))
 
+    async def release(request: Request) -> JSONResponse:
+        name = request.path_params["name"]
+        if not service.is_throttled(name):
+            return JSONResponse({"error": "묶인 서버가 아님"}, status_code=404)
+        await service.release(name, actor="admin-api")
+        return JSONResponse({"server": name, "released": True})
+
     return [
+        Route("/admin/servers/{name}/release", release, methods=["POST"]),
         Route("/admin/pending", pending),
         Route("/admin/verdicts", verdicts),
         Route("/admin/servers", servers),
