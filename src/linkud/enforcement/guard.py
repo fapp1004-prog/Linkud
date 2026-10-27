@@ -57,9 +57,15 @@ class Enforcer:
         self._seen[server] = {t.name: tool_hash(t) for t in unique}
 
         listed: list[ToolVerdict | None] = [verdicts.get(t.name) for t in unique]
-        tier = server_tier(listed + [None] * len(duplicated))
+        tier = self._effective_tier(server, server_tier(listed + [None] * len(duplicated)))
         await self._note_tier(server, tier)
         return [t for t in unique if permits(tier, verdicts.get(t.name))]
+
+    def _effective_tier(self, server: str, tier: Tier | None) -> Tier | None:
+        """재검증 상한으로 묶인 서버는 판정과 관계없이 승인 대기 (메모리 조회만)."""
+        if self.service.is_throttled(server):
+            return Tier.PENDING
+        return tier
 
     async def _note_tier(self, server: str, tier: Tier | None) -> None:
         if self._tiers.get(server, "unset") != tier:
@@ -76,7 +82,7 @@ class Enforcer:
         self, server: str, tool: str, arguments: dict[str, Any] | None = None
     ) -> CallDecision:
         verdicts = await self._cached_verdicts(server)
-        tier = server_tier(verdicts.values())
+        tier = self._effective_tier(server, server_tier(verdicts.values()))
         verdict = verdicts.get(tool)
         if tool not in verdicts:
             decision = CallDecision(False, "목록에서 확인되지 않은 도구")

@@ -51,6 +51,10 @@ class GatewayConfig:
     no_supply_info: str = "partial"  # partial(부분신뢰) | record(기록만)
     # 이전 판정이 있던 도구의 정의가 바뀌면 신뢰·부분신뢰여도 승인 대기로 (러그풀 재승인)
     reapprove_on_change: bool = True
+    # 자원 고갈 방어: 첫 목록 이후 reverify_window초 안의 재검증이 reverify_limit번을 넘으면
+    # 그 서버를 승인 대기로 묶는다(관리 API로 해제)
+    reverify_limit: int = 30
+    reverify_window: float = 600.0
     # 공급망 검증
     supply_enabled: bool = True
     registry_url: str = "https://registry.modelcontextprotocol.io"

@@ -206,6 +206,8 @@ def create_app(
         cache,
         store,
         timeout=config.verify_timeout,
+        reverify_limit=config.reverify_limit,
+        reverify_window=config.reverify_window,
     )
     if supply is not None:
         supply.on_update = service.invalidate_server
