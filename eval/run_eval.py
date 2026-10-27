@@ -14,8 +14,8 @@ import argparse
 import asyncio
 import json
 import platform
-import statistics
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -27,12 +27,14 @@ from mcp import Client
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from eval.measure import measure_path, stats  # noqa: E402
 from eval.samples import BENIGN_EXTRA, JUDGE_ATTACKS, POISONED, REFERENCE_WRITE_TOOLS  # noqa: E402
 from linkud.config import parse_config  # noqa: E402
 from linkud.enforcement.guard import Enforcer  # noqa: E402
 from linkud.models import Tier  # noqa: E402
 from linkud.proxy.gateway import Gateway, create_app  # noqa: E402
 from linkud.store.memory import MemoryCache, MemoryStore  # noqa: E402
+from linkud.store.sqlite import SqliteStore  # noqa: E402
 from linkud.verify.analyze import analyze  # noqa: E402
 from linkud.verify.decision import NoSupplyInfo, Policy, SupplySignals, decide, is_read_tool  # noqa: E402
 from linkud.verify.hashing import canonical_tool  # noqa: E402
@@ -275,42 +277,11 @@ async def eval_permission(judge: MemoJudge | None) -> dict[str, Any]:
 # --- 4. 지연 ---------------------------------------------------------------------
 
 
-def pct(values: list[float], q: float) -> float:
-    values = sorted(values)
-    return values[min(len(values) - 1, int(q * len(values)))]
-
-
-def stats(ms: list[float]) -> dict[str, float]:
-    return {"n": len(ms), "mean": statistics.mean(ms), "p50": pct(ms, 0.5), "p95": pct(ms, 0.95)}
-
-
-async def timed(fn: Any, n: int) -> list[float]:
-    out = []
-    for _ in range(n):
-        t0 = time.perf_counter()
-        await fn()
-        out.append((time.perf_counter() - t0) * 1000)
-    return out
-
-
-async def throughput(url: str, tool: str, concurrency: int, total: int) -> float:
-    per = total // concurrency
-
-    async def worker() -> None:
-        async with Client(url, cache=None) as c:
-            await c.list_tools()
-            for _ in range(per):
-                await c.call_tool(tool, {"a": 1, "b": 2})
-
-    t0 = time.perf_counter()
-    await asyncio.gather(*(worker() for _ in range(concurrency)))
-    return (per * concurrency) / (time.perf_counter() - t0)
-
-
 async def eval_latency(
     judge: Any, label: str, n: int, concurrency: int, total: int
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"judge": label, "n": n, "concurrency": concurrency, "total_calls": total}
+    tmp = tempfile.mkdtemp(prefix="linkud-eval-")
     async with serve(make_math_server().streamable_http_app()) as math_url:
         target = f"{math_url}/mcp"
         cfg = parse_config(
@@ -318,26 +289,17 @@ async def eval_latency(
         )
         policy = Policy(no_supply_info=NoSupplyInfo.RECORD)
 
-        async with Client(target, cache=None) as c:
-            await c.list_tools()
-            out["direct"] = {
-                "list_tools": stats(await timed(c.list_tools, n)),
-                "call_tool": stats(await timed(lambda: c.call_tool("add", {"a": 1, "b": 2}), n)),
-            }
-        out["direct"]["throughput_rps"] = await throughput(target, "add", concurrency, total)
+        out["direct"] = await measure_path(target, "add", n, concurrency, total)
 
-        app = create_app(cfg, store=MemoryStore(), verifier=PipelineVerifier(judge, None, policy))
-        async with serve(app) as gw_url, Client(f"{gw_url}/mcp", cache=None) as c:
-            await c.list_tools()  # 첫 검증으로 캐시를 채운다
-            out["gateway_cache_hit"] = {
-                "list_tools": stats(await timed(c.list_tools, n)),
-                "call_tool": stats(
-                    await timed(lambda: c.call_tool("math__add", {"a": 1, "b": 2}), n)
-                ),
-            }
-            out["gateway_cache_hit"]["throughput_rps"] = await throughput(
-                f"{gw_url}/mcp", "math__add", concurrency, total
+        for key, store_factory in (
+            ("gateway_cache_hit", lambda: MemoryStore()),
+            ("gateway_cache_hit_sqlite", lambda: SqliteStore(Path(tmp) / "bench.db")),
+        ):
+            app = create_app(
+                cfg, store=store_factory(), verifier=PipelineVerifier(judge, None, policy)
             )
+            async with serve(app) as gw_url:
+                out[key] = await measure_path(f"{gw_url}/mcp", "math__add", n, concurrency, total)
 
         first: list[float] = []
         for _ in range(max(5, n // 10)):
@@ -484,21 +446,54 @@ def render(r: dict[str, Any]) -> str:
         "",
         "## 4. 지연",
         "",
-        f"같은 머신·같은 프로세스, 순차 {lat['n']}회 (ms). 처리량은 동시 {lat['concurrency']} 클라이언트, 호출 {lat['total_calls']}회. 판별기: {lat['judge']}, 공급망 조회 제외.",
+        f"같은 머신, 순차 {lat['n']}회 (ms). 처리량은 동시 {lat['concurrency']} 클라이언트, 호출 {lat['total_calls']}회. 판별기: {lat['judge']}, 공급망 조회 제외.",
+        "",
+    ]
+
+    def row(label: str, x: dict[str, Any]) -> str:
+        return (
+            f"| {label} | {x['list_tools']['p50']:.2f} / {x['list_tools']['p95']:.2f} | "
+            f"{x['call_tool']['p50']:.2f} / {x['call_tool']['p95']:.2f} | {x['throughput_rps']:.0f} |"
+        )
+
+    lines.append(
+        "**(가) 한 프로세스** — 테스트 서버·게이트웨이·부하 클라이언트가 이벤트 루프 하나를 나눠 씀"
+    )
+    lines += [
         "",
         "| 경로 | list_tools p50 / p95 | call_tool p50 / p95 | 처리량 (call/s) |",
         "| --- | --- | --- | --- |",
     ]
     for key, label in (
         ("direct", "게이트웨이 없음"),
-        ("gateway_cache_hit", "게이트웨이 (캐시 히트)"),
+        ("gateway_cache_hit", "게이트웨이 (캐시 히트, MemoryStore)"),
+        ("gateway_cache_hit_sqlite", "게이트웨이 (캐시 히트, SqliteStore)"),
     ):
-        x = lat[key]
-        lines.append(
-            f"| {label} | {x['list_tools']['p50']:.2f} / {x['list_tools']['p95']:.2f} | {x['call_tool']['p50']:.2f} / {x['call_tool']['p95']:.2f} | {x['throughput_rps']:.0f} |"
-        )
+        lines.append(row(label, lat[key]))
     f = lat["first_verification"]["list_tools"]
     lines.append(f"| 첫 검증 (콜드, n={f['n']}) | {f['p50']:.2f} / {f['p95']:.2f} | - | - |")
+    mp = r.get("latency_multiproc")
+    lines += [
+        "",
+        "**(나) 별도 프로세스** — 테스트 서버·게이트웨이·부하 클라이언트가 각자 프로세스 (`eval/bench_multiproc.py`)",
+        "",
+    ]
+    if mp is None:
+        lines.append("미측정 (`--multiproc`로 실행)")
+    else:
+        lines += [
+            "| 경로 | list_tools p50 / p95 | call_tool p50 / p95 | 처리량 (call/s) |",
+            "| --- | --- | --- | --- |",
+        ]
+        for key, label in (
+            ("direct", "게이트웨이 없음"),
+            ("gateway_memory", "게이트웨이 (캐시 히트, MemoryStore)"),
+            ("gateway_sqlite", "게이트웨이 (캐시 히트, SqliteStore)"),
+        ):
+            lines.append(row(label, mp[key]))
+        lines.append(
+            f"\n(나)는 순차 {mp['n']}회, 동시 {mp['concurrency']} 클라이언트·호출 {mp['total_calls']}회. 같은 머신이라 CPU는 공유한다."
+        )
 
     lines += ["", "## 5. 판별기 내성", "", "| 지표 | 결과 |", "| --- | --- |"]
     lines.append(
@@ -517,6 +512,11 @@ async def main() -> None:
     parser.add_argument("-n", type=int, default=200, help="지연 측정 순차 요청 수")
     parser.add_argument("--concurrency", type=int, default=10)
     parser.add_argument("--total", type=int, default=1000)
+    parser.add_argument(
+        "--multiproc",
+        action="store_true",
+        help="서버·게이트웨이를 별도 프로세스로 띄운 측정도 함께",
+    )
     args = parser.parse_args()
 
     judge: MemoJudge | None = None
@@ -544,6 +544,10 @@ async def main() -> None:
         args.concurrency,
         args.total,
     )
+    if args.multiproc:
+        from eval.bench_multiproc import run as run_multiproc
+
+        results["latency_multiproc"] = await run_multiproc(args.n, args.concurrency, args.total)
     results["judge_robustness"] = await eval_judge_robustness(judge)
     if judge is not None:
         results["meta"]["llm_calls"] = judge.calls
