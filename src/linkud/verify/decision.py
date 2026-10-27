@@ -44,6 +44,8 @@ class SupplySignals:
 class Policy:
     high_confidence: float = 0.8  # 이 이상이면 LLM "악성"을 고확신으로 본다
     no_supply_info: NoSupplyInfo = NoSupplyInfo.PARTIAL
+    # 이전 판정이 있던 도구의 정의가 바뀌면, 새 판정이 신뢰·부분신뢰여도 사람이 다시 승인하게 한다
+    reapprove_on_change: bool = True
 
 
 @dataclass(frozen=True)

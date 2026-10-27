@@ -160,6 +160,7 @@ def make_verifier(config: GatewayConfig, supply: SupplyChecker | None = None) ->
     policy = Policy(
         high_confidence=config.high_confidence,
         no_supply_info=NoSupplyInfo(config.no_supply_info),
+        reapprove_on_change=config.reapprove_on_change,
     )
     return PipelineVerifier(make_judge(config), supply, policy)
 

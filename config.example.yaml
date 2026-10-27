@@ -13,6 +13,7 @@ gateway:
   judge_timeout: 20
   high_confidence: 0.8  # LLM '악성' 고확신 기준
   no_supply_info: partial  # 공급망 정보 없음: partial(읽기만) | record(기록만)
+  reapprove_on_change: true  # 승인된 도구의 정의가 바뀌면 깨끗해 보여도 재승인 필요
   supply_enabled: true  # Registry → 패키지 → SBOM(syft) → OSV
   syft_path: syft
   supply_timeout: 15    # 넘기면 이번 판정은 정보 없음, 끝나면 재검증

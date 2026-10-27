@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from linkud.models import ToolVerdict
+from linkud.models import Tier, ToolVerdict
 from linkud.verify.analyze import analyze
 from linkud.verify.decision import Policy, SupplySignals, decide, is_read_tool
 from linkud.verify.hashing import canonical_tool
@@ -50,17 +50,25 @@ class PipelineVerifier:
         is_read, read_reasons = is_read_tool(definition, analysis)
 
         reasons = decision.reasons + read_reasons
+        tier = decision.tier
         if req.previous is not None:
             reasons.append(f"정의 변경 후 재검증 (이전 등급: {req.previous.tier.label})")
+            # 러그풀은 '승인 뒤 몰래 바꾸기'라서, 바뀐 정의가 깨끗해 보여도 자동으로 다시 열지 않는다
+            if self.policy.reapprove_on_change and tier in (Tier.TRUSTED, Tier.PARTIAL):
+                tier = Tier.PENDING
+                reasons.insert(
+                    0, f"정의 변경: 재승인 필요 (결정 테이블 결과 {decision.tier.label})"
+                )
         return ToolVerdict(
             server=req.server,
             tool=req.tool.name,
             tool_hash=req.tool_hash,
-            tier=decision.tier,
+            tier=tier,
             is_read=is_read,
             reasons=reasons,
             details={
                 "decision_row": decision.row,
+                "decision_tier": decision.tier.value,
                 "annotation_mismatch": mismatch,
                 "analysis": analysis.to_dict(),
                 "supply": {

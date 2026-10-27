@@ -49,6 +49,8 @@ class GatewayConfig:
     # 결정 테이블 정책
     high_confidence: float = 0.8
     no_supply_info: str = "partial"  # partial(부분신뢰) | record(기록만)
+    # 이전 판정이 있던 도구의 정의가 바뀌면 신뢰·부분신뢰여도 승인 대기로 (러그풀 재승인)
+    reapprove_on_change: bool = True
     # 공급망 검증
     supply_enabled: bool = True
     registry_url: str = "https://registry.modelcontextprotocol.io"

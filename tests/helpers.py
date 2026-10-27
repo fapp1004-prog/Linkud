@@ -76,15 +76,21 @@ class TrustingVerifier:
         return ToolVerdict(req.server, req.tool.name, req.tool_hash, Tier.TRUSTED, False, ["test"])
 
 
-def pipeline(judge: Any = None, supply: Any = None, no_supply_info: str = "record"):
+def pipeline(
+    judge: Any = None,
+    supply: Any = None,
+    no_supply_info: str = "record",
+    reapprove_on_change: bool = True,
+):
     """FakeJudge 기반 파이프라인 검증기. 기본은 공급망 정보 없음을 기록만 한다."""
     from linkud.verify.decision import NoSupplyInfo, Policy
     from linkud.verify.judge.fake import FakeJudge
     from linkud.verify.pipeline import PipelineVerifier
 
-    return PipelineVerifier(
-        judge or FakeJudge(), supply, Policy(no_supply_info=NoSupplyInfo(no_supply_info))
+    policy = Policy(
+        no_supply_info=NoSupplyInfo(no_supply_info), reapprove_on_change=reapprove_on_change
     )
+    return PipelineVerifier(judge or FakeJudge(), supply, policy)
 
 
 def make_gateway(downstreams: list[Any], verifier: Any = None, store: Any = None):
