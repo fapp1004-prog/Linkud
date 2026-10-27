@@ -12,6 +12,10 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # 자원 제한: 다운스트림·요청 폭주로 호스트(t3.small, 2 vCPU·2GB) 전체가 멈추지 않게
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 256
     expose: ["8000"]
     logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
 

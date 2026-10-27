@@ -49,7 +49,10 @@ def test_ci_has_vulnerability_scans_and_sbom():
     assert "actions/upload-artifact@" in uses  # SBOM 첨부
 
 
-DOCKERFILES = [ROOT / "deploy" / "Dockerfile", ROOT / "tests" / "fixtures" / "poisoned_servers" / "Dockerfile"]
+DOCKERFILES = [
+    ROOT / "deploy" / "Dockerfile",
+    ROOT / "tests" / "fixtures" / "poisoned_servers" / "Dockerfile",
+]
 COMPOSES = [ROOT / "deploy" / "docker-compose.yml"]
 DIGEST = re.compile(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}")
 

@@ -33,4 +33,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LINKUD_AUTH_TOKENS: ${LINKUD_AUTH_TOKENS:-smoke-token}
     ports: ["127.0.0.1:8000:8000"]
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 256
     depends_on: [poisoned, judge, rugpull, mixed]
