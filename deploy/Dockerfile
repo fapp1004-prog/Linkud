@@ -12,24 +12,23 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
-# 공급망 검증용 syft: 릴리스 체크섬을 확인하고 설치한다
-# 1.18.1은 오래된 Go 표준 라이브러리로 빌드돼 crypto/tls CVE가 Trivy에 잡혀 최신으로 올림
+# 공급망 검증용 syft를 수정된 Go 툴체인으로 직접 빌드한다.
+# 배포 바이너리(최신 1.55.0 포함)가 Go 1.26.8로 빌드돼 stdlib CVE(crypto/x509·crypto/tls·net/http, HIGH)가
+# Trivy에 잡히는데 아직 고친 릴리스가 없다. go install은 Go 체크섬 DB(sumdb)로 모듈 무결성을 확인한다.
+# golang:1.27.3-bookworm (다이제스트 고정, 2026-10-27 기준)
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS syft
 ARG SYFT_VERSION=1.55.0
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && cd /tmp \
-    && curl -sSfLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" \
-    && curl -sSfLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt" \
-    && grep " syft_${SYFT_VERSION}_linux_amd64.tar.gz$" "syft_${SYFT_VERSION}_checksums.txt" | sha256sum -c - \
-    && tar -xzf "syft_${SYFT_VERSION}_linux_amd64.tar.gz" -C /usr/local/bin syft \
-    && rm -f /tmp/syft_* \
-    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
-    && useradd --uid 10001 --create-home app \
+ENV CGO_ENABLED=0 GOFLAGS=-trimpath
+RUN go install -ldflags "-s -w" "github.com/anchore/syft/cmd/syft@v${SYFT_VERSION}"
+
+FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
+RUN useradd --uid 10001 --create-home app \
     && mkdir /data && chown app:app /data
+COPY --from=syft /go/bin/syft /usr/local/bin/syft
 COPY --from=build /app/.venv /app/.venv
 WORKDIR /app
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1
+# syft가 실행될 때 외부로 새 버전 확인 요청을 보내지 않게 한다
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 SYFT_CHECK_FOR_APP_UPDATE=false
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s \

@@ -98,3 +98,11 @@ def test_image_scan_targets_vulnerabilities():
     )
     # 서드파티 패키지 문서 문자열의 예시 값이 비밀값으로 잡히는 오탐을 피하려고 취약점만 본다
     assert trivy["with"]["scanners"] == "vuln"
+
+
+def test_syft_built_from_source_with_pinned_go():
+    text = (ROOT / "deploy" / "Dockerfile").read_text()
+    assert re.search(r"FROM golang:[\d.]+-\w+@sha256:[0-9a-f]{64} AS syft", text)
+    assert "go install" in text and "github.com/anchore/syft/cmd/syft@v" in text
+    assert "COPY --from=syft" in text
+    assert "SYFT_CHECK_FOR_APP_UPDATE=false" in text  # 실행 중 외부 업데이트 확인 끔
