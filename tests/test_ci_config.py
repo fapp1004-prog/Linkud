@@ -93,6 +93,8 @@ def test_image_scan_targets_vulnerabilities():
     import yaml
 
     ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    trivy = next(s for s in ci["jobs"]["image-scan"]["steps"] if "trivy-action" in s.get("uses", ""))
+    trivy = next(
+        s for s in ci["jobs"]["image-scan"]["steps"] if "trivy-action" in s.get("uses", "")
+    )
     # 서드파티 패키지 문서 문자열의 예시 값이 비밀값으로 잡히는 오탐을 피하려고 취약점만 본다
     assert trivy["with"]["scanners"] == "vuln"
