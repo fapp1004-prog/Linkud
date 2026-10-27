@@ -11,7 +11,8 @@ GitHub Actions가 테스트 → 이미지 빌드(GHCR) → SSH 배포를 한다.
 ## 1. AWS 준비 (한 번)
 
 1. **EC2**: t3.small, Ubuntu 24.04, 디스크 20GB 이상.
-   보안 그룹 인바운드는 80·443(전체), 22(내 IP와 GitHub Actions에서만, 또는 SSM Session Manager 사용).
+   보안 그룹 인바운드는 80·443(전체)만 연다. 22번은 열지 않고 SSM Session Manager로 접속한다(아래 1-2).
+   SSH 배포 워크플로(`deploy.yml`)를 쓸 때만 22번을 GitHub Actions·내 IP로 제한해 연다.
 2. **도메인**: A 레코드를 EC2 탄력적 IP로 연결 (예: `gw.example.com`).
 3. **비밀값**: SSM Parameter Store에 SecureString으로 저장.
    ```bash
@@ -25,6 +26,65 @@ GitHub Actions가 테스트 → 이미지 빌드(GHCR) → SSH 배포를 한다.
      "Resource": "arn:aws:ssm:<region>:<account>:parameter/linkud/*"}]}
    ```
    (SecureString이 기본 KMS 키가 아니면 해당 키의 `kms:Decrypt`도 필요)
+
+## 1-1. 계정·인스턴스 보안 기본값 (한 번)
+
+**루트 계정 MFA와 일상 사용 금지**
+- 루트 사용자에 MFA(하드웨어 키 또는 TOTP)를 등록하고, 루트 액세스 키는 만들지 않는다(있으면 삭제).
+- 일상 작업은 IAM Identity Center 사용자나 MFA를 건 IAM 사용자로 한다.
+  ```bash
+  aws iam get-account-summary --query 'SummaryMap.{RootMFA:AccountMFAEnabled,RootKeys:AccountAccessKeysPresent}'
+  # 기대값: RootMFA = 1, RootKeys = 0
+  ```
+
+**예산 알림** — 판별 LLM 호출·EC2 비용이 예상을 넘으면 메일을 받는다.
+```bash
+aws budgets create-budget --account-id <account> \
+  --budget '{"BudgetName":"linkud-monthly","BudgetLimit":{"Amount":"30","Unit":"USD"},"TimeUnit":"MONTHLY","BudgetType":"COST"}' \
+  --notifications-with-subscribers '[
+    {"Notification":{"NotificationType":"ACTUAL","ComparisonOperator":"GREATER_THAN","Threshold":80,"ThresholdType":"PERCENTAGE"},
+     "Subscribers":[{"SubscriptionType":"EMAIL","Address":"me@example.com"}]},
+    {"Notification":{"NotificationType":"FORECASTED","ComparisonOperator":"GREATER_THAN","Threshold":100,"ThresholdType":"PERCENTAGE"},
+     "Subscribers":[{"SubscriptionType":"EMAIL","Address":"me@example.com"}]}]'
+```
+Claude API 쪽 지출 한도는 Anthropic 콘솔의 워크스페이스 한도로 따로 건다.
+
+**IMDSv2 필수 + 응답 홉 제한 1** — 인스턴스 메타데이터(인스턴스 역할 자격 증명)를 토큰 없이 못 읽게 하고,
+홉 제한 1로 컨테이너(브리지 네트워크는 홉이 하나 더 늘어남)에서는 아예 닿지 않게 한다.
+비밀값을 받는 `fetch-secrets.sh`는 호스트에서 돌므로 영향이 없다.
+```bash
+aws ec2 modify-instance-metadata-options --instance-id <i-...> \
+  --http-tokens required --http-put-response-hop-limit 1 --http-endpoint enabled
+
+# 확인 (로컬에서)
+aws ec2 describe-instances --instance-ids <i-...> \
+  --query 'Reservations[].Instances[].MetadataOptions.{Tokens:HttpTokens,Hop:HttpPutResponseHopLimit}'
+# 기대값: Tokens = required, Hop = 1
+
+# 확인 (인스턴스에서): 토큰 없는 IMDSv1 요청은 401
+curl -s -o /dev/null -w '%{http_code}\n' http://169.254.169.254/latest/meta-data/   # 401
+TOKEN=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id   # 성공
+
+# 확인 (컨테이너에서): 홉 제한 때문에 토큰 발급부터 실패해야 한다
+docker run --rm curlimages/curl:8.10.1 -s -m 3 -X PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || echo "컨테이너에서 IMDS 접근 불가 (정상)"
+```
+새로 만드는 인스턴스는 시작 템플릿에 `MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 1}`를 넣는다.
+
+## 1-2. 22번 대신 SSM Session Manager로 접속
+
+1. 인스턴스 역할에 관리형 정책 `AmazonSSMManagedInstanceCore`를 붙인다(Ubuntu 24.04 AMI에는 SSM 에이전트가 들어 있다).
+2. 보안 그룹에서 22번 인바운드를 지운다.
+3. 로컬에 Session Manager 플러그인을 설치하고 접속한다.
+   ```bash
+   aws ssm start-session --target <i-...>
+   aws ssm describe-instance-information --query 'InstanceInformationList[].{Id:InstanceId,Ping:PingStatus}'  # Online 확인
+   ```
+4. 세션 기록이 필요하면 Session Manager 기본 설정에서 CloudWatch Logs·S3 기록을 켠다.
+
+22번을 닫으면 SSH 기반 `deploy.yml`은 쓸 수 없다. 대신 GitHub OIDC + SSM Run Command로 배포하는
+`deploy-oidc.yml`을 쓴다(아래 6장).
 
 ## 2. 서버 준비 (한 번)
 
@@ -73,6 +133,29 @@ curl -X POST https://gw.example.com/mcp                   # 401 (토큰 없음)
 claude mcp add --transport http linkud https://gw.example.com/mcp \
   --header "Authorization: Bearer <LINKUD_AUTH_TOKENS 중 하나>"
 ```
+
+## 4-1. 접속 토큰 무중단 교체
+
+게이트웨이는 `LINKUD_AUTH_TOKENS`의 토큰을 모두 받아 주므로, 새 토큰과 옛 토큰을 잠시 함께 등록해 끊김 없이 바꾼다.
+관리 토큰(`LINKUD_ADMIN_TOKENS`)도 같은 방법으로 바꾼다.
+
+1. **새 토큰을 추가** (옛 토큰은 유지)
+   ```bash
+   NEW=$(openssl rand -hex 32)
+   OLD=$(aws ssm get-parameter --with-decryption --name /linkud/LINKUD_AUTH_TOKENS --query Parameter.Value --output text)
+   aws ssm put-parameter --overwrite --type SecureString --name /linkud/LINKUD_AUTH_TOKENS --value "${OLD},${NEW}"
+   ```
+2. **재배포** — `main`에 push하거나 워크플로를 수동 실행(`deploy.sh`가 SSM에서 `.env`를 다시 받고 컨테이너를 교체).
+   이제 옛 토큰과 새 토큰이 모두 통한다.
+3. **에이전트 설정을 새 토큰으로 바꾼다** (`claude mcp add ... --header "Authorization: Bearer <새 토큰>"`).
+   감사 로그·nginx 접근 로그에서 옛 토큰을 쓰는 요청이 더 없는지 확인한다(401이 없어야 함).
+4. **옛 토큰 제거 후 다시 재배포**
+   ```bash
+   aws ssm put-parameter --overwrite --type SecureString --name /linkud/LINKUD_AUTH_TOKENS --value "${NEW}"
+   ```
+5. 확인: 옛 토큰으로 `curl -X POST -H "Authorization: Bearer $OLD" https://gw.example.com/mcp` → 401.
+
+토큰이 유출됐다면 1~3을 건너뛰고 바로 4(옛 토큰 제거 + 재배포)를 한다.
 
 ## 5. 승인 대기 처리 (확장)
 
