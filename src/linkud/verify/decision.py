@@ -4,7 +4,8 @@
 
 | 순서 | 조건 (도구 단위)                                                         | 판정     |
 | 1    | LLM 악성 고확신 / 규칙 치명 패턴 / OSV 악성 패키지(MAL-)                    | 불신     |
-| 2    | LLM 의심(또는 저확신 악성) / 규칙 일반 패턴 / annotations 불일치            | 승인 대기 |
+| 2    | LLM 의심(또는 저확신 악성) / 규칙 일반 패턴 / annotations 불일치 /          | 승인 대기 |
+|      | 공급망 조작 의심(패키지 해시 불일치, 기획서 표에 추가)                        |          |
 | 3    | Critical·High CVE / 공급망 정보 없음(정책에 따라)                          | 부분신뢰 |
 | 4    | 해당 없음                                                                 | 신뢰     |
 """
@@ -37,6 +38,7 @@ class SupplySignals:
     available: bool = False  # Registry에서 패키지를 찾아 조회까지 했는가
     malicious_package: bool = False  # OSV MAL- 기록
     severe_vulnerability: bool = False  # Critical·High CVE
+    tampering: bool = False  # 내려받은 패키지 해시가 레지스트리 메타데이터와 다름
     reasons: list[str] = field(default_factory=list)
 
 
@@ -86,6 +88,8 @@ def decide(
         row2.append("규칙 필터 일반 패턴")
     if annotation_mismatch:
         row2.append("annotations 불일치")
+    if supply.tampering:
+        row2.append("공급망 조작 의심 (패키지 해시 불일치)")
     if row2:
         return Decision(Tier.PENDING, 2, row2 + evidence)
 

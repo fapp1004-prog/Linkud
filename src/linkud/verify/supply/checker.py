@@ -18,7 +18,12 @@ import httpx
 
 from linkud.verify.decision import SupplySignals
 from linkud.verify.supply.osv import OsvClient, Vuln
-from linkud.verify.supply.packages import UnsupportedPackage, fetch_package
+from linkud.verify.supply.packages import (
+    IntegrityMismatch,
+    IntegrityUnavailable,
+    UnsupportedPackage,
+    fetch_package,
+)
 from linkud.verify.supply.registry import Package, RegistryClient, remote_matches
 from linkud.verify.supply.sbom import SbomUnavailable, SyftSbom, root_purl
 
@@ -40,6 +45,7 @@ class PackageResult:
     available: bool
     vulns: list[Vuln] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    tampering: bool = False
 
 
 class RegistrySupplyChecker:
@@ -118,6 +124,7 @@ class RegistrySupplyChecker:
             available=all(r.available for r in results),
             malicious_package=any(v.malicious for v in vulns),
             severe_vulnerability=any(v.severe for v in vulns),
+            tampering=any(r.tampering for r in results),
             reasons=reasons,
         )
 
@@ -143,6 +150,12 @@ class RegistrySupplyChecker:
             purls |= {c.purl for c in components}
             sbom_ok = True
             reasons.append(f"{pkg.key}: SBOM 구성요소 {len(components)}개")
+        except IntegrityMismatch as exc:
+            # 조작 의심 패키지는 풀지 않는다. 루트 패키지 OSV 결과는 그대로 조회
+            reasons.append(f"{pkg.key}: 공급망 조작 의심 ({exc})")
+            return PackageResult(pkg, False, await self.osv.query([purl]), reasons, tampering=True)
+        except IntegrityUnavailable as exc:
+            reasons.append(f"{pkg.key}: {exc}, 루트 패키지만 조회")
         except (SbomUnavailable, UnsupportedPackage, httpx.HTTPError, ValueError, OSError) as exc:
             reasons.append(
                 f"{pkg.key}: SBOM 생성 실패({type(exc).__name__}: {exc}), 루트 패키지만 조회"

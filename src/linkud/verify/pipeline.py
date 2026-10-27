@@ -75,6 +75,7 @@ class PipelineVerifier:
                     "available": supply.available,
                     "malicious_package": supply.malicious_package,
                     "severe_vulnerability": supply.severe_vulnerability,
+                    "tampering": supply.tampering,
                 },
             },
         )
