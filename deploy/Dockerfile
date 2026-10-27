@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 # Linkud 게이트웨이 이미지 (빌드 컨텍스트: 레포 루트)
 
-FROM python:3.12-slim AS build
-COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /bin/uv
+# 베이스 이미지는 다이제스트로 고정한다 (태그 python:3.12-slim, 2026-10-27 기준). Dependabot이 갱신 PR을 연다
+FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f AS build
+# uv 0.11.32 (다이제스트 고정)
+COPY --from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c /uv /bin/uv
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 COPY pyproject.toml uv.lock README.md ./
@@ -10,7 +12,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
 # 공급망 검증용 syft: 릴리스 체크섬을 확인하고 설치한다
 ARG SYFT_VERSION=1.18.1
 RUN apt-get update \

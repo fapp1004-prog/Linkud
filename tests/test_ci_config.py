@@ -47,3 +47,29 @@ def test_ci_has_vulnerability_scans_and_sbom():
     assert "aquasecurity/trivy-action@" in uses  # 이미지 취약점 스캔
     assert "anchore/sbom-action@" in uses  # syft 기반 이미지 SBOM
     assert "actions/upload-artifact@" in uses  # SBOM 첨부
+
+
+DOCKERFILES = [ROOT / "deploy" / "Dockerfile", ROOT / "tests" / "fixtures" / "poisoned_servers" / "Dockerfile"]
+COMPOSES = [ROOT / "deploy" / "docker-compose.yml"]
+DIGEST = re.compile(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}")
+
+
+def _external_images(path):
+    for line in path.read_text().splitlines():
+        s = line.strip()
+        if m := re.match(r"FROM\s+(\S+)", s):
+            yield line, m.group(1)
+        elif m := re.search(r"COPY\s+--from=(\S+)", s):
+            yield line, m.group(1)
+        elif m := re.match(r"image:\s*(\S+)", s):
+            if not m.group(1).startswith("${"):  # 직접 빌드한 이미지(배포 변수)는 제외
+                yield line, m.group(1)
+
+
+@pytest.mark.parametrize("path", DOCKERFILES + COMPOSES, ids=lambda p: str(p.relative_to(ROOT)))
+def test_base_images_pinned_by_digest(path):
+    stages = {m.group(1) for m in re.finditer(r"FROM\s+\S+\s+AS\s+(\w+)", path.read_text(), re.I)}
+    images = [(line, img) for line, img in _external_images(path) if img not in stages]
+    assert images
+    for line, img in images:
+        assert DIGEST.fullmatch(img), f"다이제스트 고정 아님: {line.strip()}"
