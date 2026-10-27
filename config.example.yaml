@@ -1,8 +1,34 @@
-# Linkud 게이트웨이 설정 예시 (형식 초안) — 복사해서 config.yaml로 사용
+# Linkud 게이트웨이 설정 예시 — 복사해서 config.yaml로 사용
 gateway:
   name: linkud-gateway
+  host: 127.0.0.1
+  port: 8000
+  path: /mcp
+  connect_timeout: 10   # 다운스트림 연결 대기(초)
+  call_timeout: 30      # 다운스트림 응답 대기(초)
+  verify_timeout: 30    # 도구 검증 대기(초), 넘기면 숨김
+  db_path: linkud.db    # 판정 이력·감사 로그 (SQLite)
+  judge: claude         # claude(ANTHROPIC_API_KEY 필요) | fake(개발용, LLM 판별 없음)
+  judge_model: claude-haiku-5-5
+  judge_timeout: 20
+  high_confidence: 0.8  # LLM '악성' 고확신 기준
+  no_supply_info: partial  # 공급망 정보 없음: partial(읽기만) | record(기록만)
+  supply_enabled: true  # Registry → 패키지 → SBOM(syft) → OSV
+  syft_path: syft
+  supply_timeout: 15    # 넘기면 이번 판정은 정보 없음, 끝나면 재검증
+  # allowed_hosts: [gw.example.com]   # 공개 배포 시 Host 헤더 허용 목록
+  max_result_bytes: 1000000          # 도구 결과 크기 상한
+  arg_inspection: true               # 위험한 인자 값(~/.ssh 등)으로의 호출 차단
+# 비밀값은 환경변수로 준다:
+#   LINKUD_AUTH_TOKENS   에이전트 접속 토큰(쉼표 구분). 루프백이 아닌 주소에 바인딩하면 필수
+#   LINKUD_ADMIN_TOKENS  관리 API(/admin) 토큰. 없으면 관리 API를 열지 않음
+#   SLACK_WEBHOOK_URL, SLACK_SIGNING_SECRET, SLACK_APPROVERS  Slack 승인(선택)
 
-# 게이트웨이 뒤에 붙일 MCP 서버 목록
+# 게이트웨이 뒤에 붙일 원격 HTTP MCP 서버 목록 (stdio 서버는 받지 않음)
+# 에이전트에게는 <name>__<도구이름> 으로 노출된다
 downstreams:
-  - name: benign
-    url: http://localhost:8001/mcp
+  - name: math
+    url: http://127.0.0.1:8001/mcp
+    # registry: io.github.example/math   # MCP Registry server.json 이름 (공급망 검증용)
+  - name: notes
+    url: http://127.0.0.1:8002/mcp
