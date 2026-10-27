@@ -34,3 +34,16 @@ def test_dependabot_covers_actions_and_python():
     ecosystems = {u["package-ecosystem"] for u in cfg["updates"]}
     assert {"github-actions", "uv"} <= ecosystems
     assert all(u.get("schedule", {}).get("interval") for u in cfg["updates"])
+
+
+def test_ci_has_vulnerability_scans_and_sbom():
+    import yaml
+
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    steps = [s for job in ci["jobs"].values() for s in job["steps"]]
+    runs = " ".join(s.get("run", "") for s in steps)
+    uses = " ".join(s.get("uses", "") for s in steps)
+    assert "pip-audit" in runs  # 의존성 취약점 검사
+    assert "aquasecurity/trivy-action@" in uses  # 이미지 취약점 스캔
+    assert "anchore/sbom-action@" in uses  # syft 기반 이미지 SBOM
+    assert "actions/upload-artifact@" in uses  # SBOM 첨부
