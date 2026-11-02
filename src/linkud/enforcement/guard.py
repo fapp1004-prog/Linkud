@@ -110,16 +110,37 @@ class Enforcer:
         """
         if self.overrides is None or user is None:
             return None
-        if tier is not Tier.PENDING or self.service.is_throttled(server):
-            return None
-        if self._duplicates.get(server, 0) or any(v is None for v in verdicts.values()):
-            return None
-        verdict = verdicts.get(tool)
-        if verdict is None or verdict.tier is Tier.UNTRUSTED:
-            return None
-        if not verdict.is_read and not self.allow_write_override:
+        if not self._override_eligible(server, tool, verdicts, tier):
             return None
         return self.overrides.active_for(user, server, tool, tool_hash_, self.clock())
+
+    def _override_eligible(
+        self,
+        server: str,
+        tool: str,
+        verdicts: dict[str, ToolVerdict | None],
+        tier: Tier | None,
+    ) -> bool:
+        if tier is not Tier.PENDING or self.service.is_throttled(server):
+            return False
+        if self._duplicates.get(server, 0) or any(v is None for v in verdicts.values()):
+            return False
+        verdict = verdicts.get(tool)
+        if verdict is None or verdict.tier is Tier.UNTRUSTED:
+            return False
+        return verdict.is_read or self.allow_write_override
+
+    async def override_target(self, server: str, tool: str) -> str | None:
+        """지금 이 도구에 임시 허용을 줄 수 있으면 현재 정의 해시, 아니면 None (캐시만 조회)."""
+        verdicts = await self._cached_verdicts(server)
+        if tool not in verdicts:
+            return None
+        tier = self._effective_tier(
+            server, server_tier(list(verdicts.values()) + [None] * self._duplicates.get(server, 0))
+        )
+        if not self._override_eligible(server, tool, verdicts, tier):
+            return None
+        return self._seen.get(server, {}).get(tool)
 
     async def _log_expired_overrides(self) -> None:
         if self.overrides is None:

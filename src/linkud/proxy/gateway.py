@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -26,12 +27,15 @@ from starlette.routing import Route
 
 from linkud import __version__
 from linkud.admin.api import admin_routes
+from linkud.admin.break_glass import OVERRIDE_PATHS, break_glass_routes
 from linkud.admin.slack import SlackNotifier, slack_routes
 from linkud.config import ConfigError, GatewayConfig
 from linkud.enforcement.guard import DENY_TEMPLATE, Enforcer
+from linkud.enforcement.overrides import OverrideRegistry
 from linkud.proxy import naming
 from linkud.proxy.auth import (
     ADMIN_TOKENS_ENV,
+    OVERRIDE_TOKENS_ENV,
     TOKENS_ENV,
     BearerAuth,
     load_identities,
@@ -256,7 +260,16 @@ def create_app(
     )
     if supply is not None:
         supply.on_update = service.invalidate_server
-    enforcer = Enforcer(service, cache, store, inspect_arguments=config.arg_inspection)
+    tokens = load_identities()
+    registry, override_identities = _break_glass_setup(config, tokens)
+    enforcer = Enforcer(
+        service,
+        cache,
+        store,
+        inspect_arguments=config.arg_inspection,
+        overrides=registry,
+        allow_write_override=config.break_glass_allow_write,
+    )
     gateway = Gateway(downstreams, enforcer, max_result_bytes=config.max_result_bytes)
     server = build_server(gateway, config.name)
 
@@ -273,6 +286,15 @@ def create_app(
     if signing_secret := os.environ.get("SLACK_SIGNING_SECRET"):
         approvers = set(load_tokens("SLACK_APPROVERS")) or None
         routes += slack_routes(service, http, signing_secret, approvers)
+    if registry is not None:
+        routes += break_glass_routes(
+            config,
+            enforcer,
+            registry,
+            store,
+            override_identities,
+            {d.name for d in downstreams},
+        )
     security = None
     if config.allowed_hosts:
         security = TransportSecuritySettings(
@@ -292,6 +314,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         await service.warm()
+        if registry is not None:
+            await registry.restore(store, now=time.time())
         async with anyio.create_task_group() as tg:
             await purge_once(store, config.audit_retention_days)
             tg.start_soon(retention_loop, store, config.audit_retention_days)
@@ -309,7 +333,6 @@ def create_app(
     app.router.lifespan_context = lifespan
     app.state.gateway = gateway
 
-    tokens = load_identities()
     if not tokens:
         if config.host not in ("127.0.0.1", "localhost", "::1"):
             # 공개 주소에 인증 없이 뜨지 않는다 (fail-closed)
@@ -318,6 +341,28 @@ def create_app(
     app.add_middleware(
         BearerAuth,
         routes={config.path: tokens or None, "/admin": admin_tokens},
-        exempt=("/healthz", "/slack/actions"),  # Slack은 자체 서명으로 검증
+        # Slack은 자체 서명으로, /override는 처리기가 사람 전용 토큰으로 직접 인증한다
+        exempt=("/healthz", "/slack/actions", *OVERRIDE_PATHS),
     )
     return app
+
+
+def _break_glass_setup(
+    config: GatewayConfig, tokens: dict[str, str | None]
+) -> tuple[OverrideRegistry | None, dict[str, str | None]]:
+    """브레이크 글래스가 켜져 있으면 사람 전용 토큰을 검증하고 레지스트리를 만든다 (틀리면 시작 거부)."""
+    if not config.break_glass_enabled:
+        return None, {}
+    human = load_identities(OVERRIDE_TOKENS_ENV)
+    if not human:
+        raise ConfigError(f"break_glass_enabled에는 {OVERRIDE_TOKENS_ENV}(이름=토큰)이 필요함")
+    agent_names = {u for u in tokens.values() if u}
+    for token, user in human.items():
+        if user is None:
+            raise ConfigError(f"{OVERRIDE_TOKENS_ENV}는 이름=토큰 형식만 받음 (익명 불가)")
+        if user not in agent_names:
+            raise ConfigError(f"{OVERRIDE_TOKENS_ENV}의 이름은 {TOKENS_ENV}에 있는 이름이어야 함")
+        if token in tokens:
+            # 에이전트가 가진 MCP 토큰으로 임시 허용을 받을 수 있게 되므로 거부
+            raise ConfigError(f"{OVERRIDE_TOKENS_ENV}에 MCP 접속 토큰과 같은 값을 쓸 수 없음")
+    return OverrideRegistry(), human

@@ -19,6 +19,8 @@ from linkud.config import ConfigError
 
 TOKENS_ENV = "LINKUD_AUTH_TOKENS"
 ADMIN_TOKENS_ENV = "LINKUD_ADMIN_TOKENS"
+# 브레이크 글래스용 사람 전용 토큰(이름=토큰). 에이전트 클라이언트 설정에 넣지 않는다
+OVERRIDE_TOKENS_ENV = "LINKUD_OVERRIDE_TOKENS"
 
 
 def load_tokens(env: str = TOKENS_ENV) -> list[str]:
@@ -59,7 +61,7 @@ def load_identities(env: str = TOKENS_ENV) -> dict[str, str | None]:
     return parse_identities(os.environ.get(env, ""))
 
 
-def _match(
+def match_identity(
     header: bytes | None, identities: list[tuple[bytes, str | None]]
 ) -> tuple[bool, str | None]:
     """토큰이 맞으면 (True, 사용자 이름). 모든 토큰과 비교해 어느 토큰이 맞았는지 시간으로 드러나지 않게 한다."""
@@ -117,7 +119,7 @@ class BearerAuth:
             await self.app(scope, receive, send)
             return
         if identities is not False:
-            ok, user = _match(dict(scope["headers"]).get(b"authorization"), identities)
+            ok, user = match_identity(dict(scope["headers"]).get(b"authorization"), identities)
             if ok:
                 scope.setdefault("state", {})[USER_STATE_KEY] = user
                 await self.app(scope, receive, send)
