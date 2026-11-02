@@ -24,7 +24,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from linkud.enforcement.overrides import Override
 from linkud.models import Tier, ToolVerdict
+from linkud.proxy import naming
 from linkud.verify.service import VerificationService
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,24 @@ def build_message(v: ToolVerdict) -> dict[str, Any]:
     }
 
 
+def build_override_message(o: Override) -> dict[str, Any]:
+    """브레이크 글래스 임시 허용 알림. 사유는 사용자가 쓴 텍스트라 mrkdwn으로 해석되지 않게 이스케이프한다."""
+    expires = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(o.expires_at))
+    title = f"Linkud 임시 허용: {o.user} → {naming.qualify(o.server, o.tool)}"
+    body = (
+        f"*사용자* {escape(o.user)}\n*도구* `{escape(naming.qualify(o.server, o.tool))}`\n"
+        f"*만료* {expires}\n*참조 번호* {escape(o.ref)}\n*사유* {escape(o.reason[:500])}\n"
+        f"*id* `{escape(o.id)}` (회수: DELETE /admin/overrides/{escape(o.id)})"
+    )
+    return {
+        "text": escape(title),
+        "blocks": [
+            {"type": "header", "text": {"type": "plain_text", "text": title[:150]}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": body[:2900]}},
+        ],
+    }
+
+
 class SlackNotifier:
     def __init__(self, webhook_url: str, http: httpx.AsyncClient) -> None:
         self.webhook_url = webhook_url
@@ -80,6 +100,12 @@ class SlackNotifier:
         if verdict.tier is not Tier.PENDING:
             return
         task = asyncio.create_task(self._send(build_message(verdict)))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def notify_override(self, override: Override) -> None:
+        """임시 허용을 관리자에게 즉시 알린다(뒤에서 전송)."""
+        task = asyncio.create_task(self._send(build_override_message(override)))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 

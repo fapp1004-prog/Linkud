@@ -280,9 +280,11 @@ def create_app(
     routes = [Route("/healthz", healthz)]
     admin_tokens = load_tokens(ADMIN_TOKENS_ENV)
     if admin_tokens:
-        routes += admin_routes(service, enforcer, store)
+        routes += admin_routes(service, enforcer, store, registry)
+    notifier = None
     if webhook := os.environ.get("SLACK_WEBHOOK_URL"):
-        service.on_verdict.append(SlackNotifier(webhook, http).notify)
+        notifier = SlackNotifier(webhook, http)
+        service.on_verdict.append(notifier.notify)
     if signing_secret := os.environ.get("SLACK_SIGNING_SECRET"):
         approvers = set(load_tokens("SLACK_APPROVERS")) or None
         routes += slack_routes(service, http, signing_secret, approvers)
@@ -294,6 +296,7 @@ def create_app(
             store,
             override_identities,
             {d.name for d in downstreams},
+            notifier.notify_override if notifier is not None else None,
         )
     security = None
     if config.allowed_hosts:

@@ -20,7 +20,7 @@ SUSPICIOUS = FakeJudge(
 )
 
 
-def env(monkeypatch, override="alice=human-alice,bob=human-bob"):
+def env(monkeypatch, override="alice=human-alice,bob=human-bob", slack=None):
     monkeypatch.setenv("LINKUD_AUTH_TOKENS", "alice=agent-alice,bob=agent-bob,anon-token")
     monkeypatch.setenv("LINKUD_ADMIN_TOKENS", "admin")
     if override is None:
@@ -29,6 +29,8 @@ def env(monkeypatch, override="alice=human-alice,bob=human-bob"):
         monkeypatch.setenv("LINKUD_OVERRIDE_TOKENS", override)
     for k in ("SLACK_WEBHOOK_URL", "SLACK_SIGNING_SECRET"):
         monkeypatch.delenv(k, raising=False)
+    if slack:
+        monkeypatch.setenv("SLACK_WEBHOOK_URL", slack)
 
 
 def make(monkeypatch, *, enabled=True, extra=None, tools=None, verifier=None, **gw):
