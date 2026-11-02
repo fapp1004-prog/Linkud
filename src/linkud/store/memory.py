@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from linkud.models import ToolVerdict
-from linkud.store.base import AuditEvent, verdict_key
+from linkud.store.base import AuditEvent, DuplicateRef, verdict_key
 
 
 class MemoryCache:
@@ -39,9 +39,16 @@ class MemoryStore:
         return list(latest.values())
 
     async def log(self, event: AuditEvent) -> None:
+        if event.ref is not None and any(e.ref == event.ref for e in self.events):
+            raise DuplicateRef(event.ref)
         if not event.ts:
-            event = AuditEvent(event.kind, event.server, event.tool, event.detail, time.time())
+            event = AuditEvent(
+                event.kind, event.server, event.tool, event.detail, time.time(), event.ref
+            )
         self.events.append(event)
+
+    async def find_by_ref(self, ref: str) -> AuditEvent | None:
+        return next((e for e in self.events if e.ref == ref), None)
 
     async def audit_log(self, limit: int = 100) -> list[AuditEvent]:
         return list(reversed(self.events))[:limit]

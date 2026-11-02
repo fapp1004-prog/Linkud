@@ -16,7 +16,7 @@ from pathlib import Path
 import anyio
 
 from linkud.models import Tier, ToolVerdict
-from linkud.store.base import AuditEvent
+from linkud.store.base import AuditEvent, DuplicateRef
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS verdicts (
@@ -49,6 +49,17 @@ class SqliteStore:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """이전 버전 DB에 없는 칸·인덱스를 더한다."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(audit)")}
+        if "ref" not in cols:
+            self._conn.execute("ALTER TABLE audit ADD COLUMN ref TEXT")
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS audit_ref ON audit (ref) WHERE ref IS NOT NULL"
+        )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -100,17 +111,21 @@ class SqliteStore:
         await anyio.to_thread.run_sync(self._log, event)
 
     def _log(self, event: AuditEvent) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "INSERT INTO audit (ts, kind, server, tool, detail) VALUES (?, ?, ?, ?, ?)",
-                (
-                    event.ts or time.time(),
-                    event.kind,
-                    event.server,
-                    event.tool,
-                    json.dumps(event.detail, ensure_ascii=False),
-                ),
-            )
+        try:
+            with self._lock, self._conn:
+                self._conn.execute(
+                    "INSERT INTO audit (ts, kind, server, tool, detail, ref) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        event.ts or time.time(),
+                        event.kind,
+                        event.server,
+                        event.tool,
+                        json.dumps(event.detail, ensure_ascii=False),
+                        event.ref,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRef(event.ref) from exc
 
     async def audit_log(self, limit: int = 100) -> list[AuditEvent]:
         return await anyio.to_thread.run_sync(self._audit_log, limit)
@@ -118,10 +133,20 @@ class SqliteStore:
     def _audit_log(self, limit: int) -> list[AuditEvent]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT kind, server, tool, detail, ts FROM audit ORDER BY id DESC LIMIT ?",
+                "SELECT kind, server, tool, detail, ts, ref FROM audit ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [AuditEvent(r[0], r[1], r[2], json.loads(r[3]), r[4]) for r in rows]
+        return [AuditEvent(r[0], r[1], r[2], json.loads(r[3]), r[4], r[5]) for r in rows]
+
+    async def find_by_ref(self, ref: str) -> AuditEvent | None:
+        return await anyio.to_thread.run_sync(self._find_by_ref, ref)
+
+    def _find_by_ref(self, ref: str) -> AuditEvent | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT kind, server, tool, detail, ts, ref FROM audit WHERE ref = ?", (ref,)
+            ).fetchone()
+        return None if r is None else AuditEvent(r[0], r[1], r[2], json.loads(r[3]), r[4], r[5])
 
     async def purge_audit(self, before: float) -> int:
         return await anyio.to_thread.run_sync(self._purge_audit, before)
