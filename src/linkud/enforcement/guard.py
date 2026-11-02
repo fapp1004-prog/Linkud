@@ -10,6 +10,7 @@ LLM·네트워크를 부르지 않는다(런타임 경로 분리).
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,6 +18,7 @@ from typing import Any
 import mcp.types as types
 
 from linkud.enforcement.arguments import dangerous_arguments
+from linkud.enforcement.overrides import Override, OverrideRegistry
 from linkud.enforcement.refs import new_ref
 from linkud.models import Tier, ToolVerdict
 from linkud.store.base import AuditEvent, Cache, DuplicateRef, Store, verdict_key
@@ -50,8 +52,14 @@ class Enforcer:
         store: Store,
         *,
         inspect_arguments: bool = True,
+        overrides: OverrideRegistry | None = None,
+        allow_write_override: bool = False,
     ) -> None:
         self.service = service
+        # 브레이크 글래스 임시 허용 (docs/break-glass.md). None이면 기능 꺼짐
+        self.overrides = overrides
+        self.allow_write_override = allow_write_override
+        self.clock = time.time
         self.inspect_arguments = inspect_arguments
         self.cache = cache
         self.store = store
@@ -62,7 +70,9 @@ class Enforcer:
         # 서버 → 마지막 목록에서 이름이 겹친 도구 수. 호출 가드도 목록과 같은 서버 등급을 쓰게 한다
         self._duplicates: dict[str, int] = {}
 
-    async def visible_tools(self, server: str, tools: Sequence[types.Tool]) -> list[types.Tool]:
+    async def visible_tools(
+        self, server: str, tools: Sequence[types.Tool], user: str | None = None
+    ) -> list[types.Tool]:
         names = [t.name for t in tools]
         duplicated = {n for n in names if names.count(n) > 1}
         # 이름이 겹치는 도구는 어떤 정의가 호출될지 알 수 없으므로 서버 전체를 승인 대기로 본다.
@@ -75,7 +85,75 @@ class Enforcer:
         listed: list[ToolVerdict | None] = [verdicts.get(t.name) for t in unique]
         tier = self._effective_tier(server, server_tier(listed + [None] * len(duplicated)))
         await self._note_tier(server, tier)
-        return [t for t in unique if permits(tier, verdicts.get(t.name))]
+        await self._log_expired_overrides()
+        visible = []
+        for t in unique:
+            if permits(tier, verdicts.get(t.name)) or self._override_for(
+                server, t.name, user, verdicts, tier, self._seen[server][t.name]
+            ):
+                visible.append(t)
+        return visible
+
+    def _override_for(
+        self,
+        server: str,
+        tool: str,
+        user: str | None,
+        verdicts: dict[str, ToolVerdict | None],
+        tier: Tier | None,
+        tool_hash_: str | None,
+    ) -> Override | None:
+        """이 사용자에게 이 도구의 임시 허용이 지금 적용되는가 (메모리 조회만).
+
+        서버가 지금도 '승인 대기'이고(불신·재검증 상한이면 불가), 그 서버의 모든 도구에 판정이 있고
+        (검증 실패·이름 중복이면 불가), 쓰기 도구는 allow_write_override일 때만 적용한다.
+        """
+        if self.overrides is None or user is None:
+            return None
+        if not self._override_eligible(server, tool, verdicts, tier):
+            return None
+        return self.overrides.active_for(user, server, tool, tool_hash_, self.clock())
+
+    def _override_eligible(
+        self,
+        server: str,
+        tool: str,
+        verdicts: dict[str, ToolVerdict | None],
+        tier: Tier | None,
+    ) -> bool:
+        if tier is not Tier.PENDING or self.service.is_throttled(server):
+            return False
+        if self._duplicates.get(server, 0) or any(v is None for v in verdicts.values()):
+            return False
+        verdict = verdicts.get(tool)
+        if verdict is None or verdict.tier is Tier.UNTRUSTED:
+            return False
+        return verdict.is_read or self.allow_write_override
+
+    async def override_target(self, server: str, tool: str) -> str | None:
+        """지금 이 도구에 임시 허용을 줄 수 있으면 현재 정의 해시, 아니면 None (캐시만 조회)."""
+        verdicts = await self._cached_verdicts(server)
+        if tool not in verdicts:
+            return None
+        tier = self._effective_tier(
+            server, server_tier(list(verdicts.values()) + [None] * self._duplicates.get(server, 0))
+        )
+        if not self._override_eligible(server, tool, verdicts, tier):
+            return None
+        return self._seen.get(server, {}).get(tool)
+
+    async def _log_expired_overrides(self) -> None:
+        if self.overrides is None:
+            return
+        for o in self.overrides.newly_expired(self.clock()):
+            await self.store.log(
+                AuditEvent(
+                    "override_expired",
+                    o.server,
+                    o.tool,
+                    {"id": o.id, "user": o.user, "expires_at": o.expires_at, "ref": o.ref},
+                )
+            )
 
     def _effective_tier(self, server: str, tier: Tier | None) -> Tier | None:
         """재검증 상한으로 묶인 서버는 판정과 관계없이 승인 대기 (메모리 조회만)."""
@@ -124,7 +202,11 @@ class Enforcer:
         return CallDecision(False, reason, code, ref, detail)
 
     async def check_call(
-        self, server: str, tool: str, arguments: dict[str, Any] | None = None
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, Any] | None = None,
+        user: str | None = None,
     ) -> CallDecision:
         verdicts = await self._cached_verdicts(server)
         verdict = verdicts.get(tool)
@@ -133,6 +215,7 @@ class Enforcer:
         raw_tier = server_tier(list(verdicts.values()) + [None] * self._duplicates.get(server, 0))
         tier = self._effective_tier(server, raw_tier)
         detail: dict[str, Any] = {
+            "user": user,
             "hash": h,
             "tier": tier.value if tier else None,
             "tool_tier": verdict.tier.value if verdict else None,
@@ -148,7 +231,11 @@ class Enforcer:
             return await self._deny(
                 server, tool, "no_verdict", "판정 없음 (검증 실패 또는 진행 중)", detail
             )
+        await self._log_expired_overrides()
+        override = None
         if not permits(tier, verdict):
+            override = self._override_for(server, tool, user, verdicts, tier, h)
+        if not permits(tier, verdict) and override is None:
             label = tier.label if tier else "없음"
             kind = "읽기" if verdict.is_read else "쓰기"
             detail["is_read"] = verdict.is_read
@@ -159,10 +246,14 @@ class Enforcer:
             return await self._deny(
                 server, tool, "dangerous_args", f"위험한 인자: {', '.join(danger)}", detail
             )
-        decision = CallDecision(True, f"서버 등급 {tier.label if tier else ''}")
-        await self.store.log(
-            AuditEvent("call_allowed", server, tool, {"reason": decision.reason, "hash": h})
-        )
+        reason = f"서버 등급 {tier.label if tier else ''}"
+        if override is not None:
+            reason += " + 임시 허용"
+        decision = CallDecision(True, reason)
+        allowed: dict[str, Any] = {"reason": reason, "hash": h, "user": user}
+        if override is not None:
+            allowed["override"] = override.id
+        await self.store.log(AuditEvent("call_allowed", server, tool, allowed))
         return decision
 
     def server_tiers(self) -> dict[str, Tier | None]:

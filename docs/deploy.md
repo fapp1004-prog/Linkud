@@ -182,7 +182,41 @@ curl -H "$H" -X POST https://gw.example.com/admin/decisions \
 3. Basic Information의 Signing Secret → `/linkud/SLACK_SIGNING_SECRET`
 4. (권장) 승인할 사람의 Slack 사용자 ID 목록 → `/linkud/SLACK_APPROVERS` (쉼표 구분)
 
-nginx 설정(`deploy/nginx/templates/linkud.conf.template`)은 `/mcp`, `/healthz`, `/admin`, `/slack/actions`만 넘긴다.
+nginx 설정(`deploy/nginx/templates/linkud.conf.template`)은 `/mcp`, `/healthz`, `/admin`, `/slack/actions`,
+`/override`(브레이크 글래스)만 넘긴다.
+
+## 5-1. 브레이크 글래스: 사용자 임시 허용 (선택, 기본 꺼짐)
+
+오탐으로 '승인 대기'에 걸린 도구를 사용자 본인이 잠시 직접 허용하게 한다. 설계·위협은 [break-glass.md](break-glass.md).
+
+1. **사용자별 MCP 토큰에 이름을 붙인다** (`이름=토큰`). 이름 없는 토큰은 익명이라 임시 허용을 쓸 수 없다.
+   ```bash
+   aws ssm put-parameter --overwrite --type SecureString --name /linkud/LINKUD_AUTH_TOKENS \
+     --value "alice=$(openssl rand -hex 32),bob=$(openssl rand -hex 32)"
+   ```
+2. **사람 전용 토큰을 따로 만든다** (`LINKUD_OVERRIDE_TOKENS`, 같은 이름, 다른 값). 이 토큰은 에이전트 클라이언트 설정
+   (`claude mcp add --header ...`)이나 에이전트가 읽을 수 있는 파일·환경변수에 넣지 않는다. 비밀번호 관리자에 둔다.
+   MCP 토큰과 같은 값이거나 이름이 MCP 토큰에 없으면 게이트웨이가 시작을 거부한다.
+   ```bash
+   aws ssm put-parameter --type SecureString --name /linkud/LINKUD_OVERRIDE_TOKENS \
+     --value "alice=$(openssl rand -hex 32),bob=$(openssl rand -hex 32)"
+   ```
+3. **`config.yaml`에서 켠다.**
+   ```yaml
+   gateway:
+     break_glass_enabled: true
+     break_glass_ttl_hours: 8        # 상한 24
+     break_glass_daily_limit: 3      # 사용자별 최근 24시간
+     break_glass_allow_write: false  # 읽기 도구만
+   ```
+4. 재배포 후 사용자는 `https://gw.example.com/override`에서 사람 전용 토큰·참조 번호·사유를 넣는다.
+   nginx는 `/override`와 `/override/` 정적 파일만 추가로 넘긴다(템플릿에 포함).
+5. 관리자 확인·회수
+   ```bash
+   curl -H "$H" https://gw.example.com/admin/overrides                    # 목록(활성·만료·사유)
+   curl -H "$H" -X DELETE https://gw.example.com/admin/overrides/<id>      # 회수
+   ```
+   Slack이 설정돼 있으면 허용 즉시 알림이 간다. 계속 써야 하는 도구는 `/admin/decisions`로 정식 확정한다.
 
 ## 6. 대안: GitHub OIDC + SSM Run Command 배포 (`deploy-oidc.yml`)
 

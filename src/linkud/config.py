@@ -18,6 +18,9 @@ import yaml
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
+BREAK_GLASS_MAX_TTL_HOURS = 24.0
+
+
 class ConfigError(ValueError):
     """설정 파일이 형식에 맞지 않을 때."""
 
@@ -69,6 +72,11 @@ class GatewayConfig:
     max_result_bytes: int = 1_000_000
     # 인자 검사(확장): 허용된 도구라도 민감 경로 등 위험한 값으로 부르면 거부
     arg_inspection: bool = True
+    # 브레이크 글래스: 사람이 승인 대기 도구를 잠시 직접 허용 (docs/break-glass.md). 기본 꺼짐
+    break_glass_enabled: bool = False
+    break_glass_ttl_hours: float = 8.0  # 상한 BREAK_GLASS_MAX_TTL_HOURS
+    break_glass_daily_limit: int = 3  # 사용자별 최근 24시간 허용 횟수
+    break_glass_allow_write: bool = False  # 쓰기 도구까지 허용할지 (기본: 읽기 도구만)
     downstreams: list[DownstreamConfig] = field(default_factory=list)
 
 
@@ -103,6 +111,10 @@ def parse_config(data: dict[str, Any]) -> GatewayConfig:
         raise ConfigError(f"judge는 claude 또는 fake: {cfg.judge!r}")
     if cfg.no_supply_info not in ("partial", "record"):
         raise ConfigError(f"no_supply_info는 partial 또는 record: {cfg.no_supply_info!r}")
+    if not 0 < cfg.break_glass_ttl_hours <= BREAK_GLASS_MAX_TTL_HOURS:
+        raise ConfigError(f"break_glass_ttl_hours는 0 초과 {BREAK_GLASS_MAX_TTL_HOURS:g} 이하")
+    if cfg.break_glass_daily_limit < 1:
+        raise ConfigError("break_glass_daily_limit는 1 이상")
     return cfg
 
 

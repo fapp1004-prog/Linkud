@@ -9,6 +9,8 @@
     GET  /admin/audit?ref=LK-XXXXXXXX   참조 번호로 거부 기록 찾기
     POST /admin/decisions               {"server", "tool", "tool_hash", "tier", "note"?}
     POST /admin/servers/{name}/release  재검증 상한으로 묶인 서버 해제
+    GET  /admin/overrides               브레이크 글래스 임시 허용 목록 (켜져 있을 때)
+    DELETE /admin/overrides/{id}        임시 허용 회수
 """
 
 from __future__ import annotations
@@ -21,9 +23,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from linkud.enforcement.guard import Enforcer
+from linkud.enforcement.overrides import Override, OverrideRegistry
 from linkud.enforcement.refs import REF_PATTERN
 from linkud.models import Tier, ToolVerdict
-from linkud.store.base import Store
+from linkud.store.base import AuditEvent, Store
 from linkud.verify.service import VerificationService
 
 # 사람이 고를 수 있는 등급 (승인 대기는 확정이 아님)
@@ -43,7 +46,28 @@ def verdict_json(v: ToolVerdict) -> dict[str, Any]:
     }
 
 
-def admin_routes(service: VerificationService, enforcer: Enforcer, store: Store) -> list[Route]:
+def override_json(o: Override, now: float) -> dict[str, Any]:
+    return {
+        "id": o.id,
+        "user": o.user,
+        "server": o.server,
+        "tool": o.tool,
+        "tool_hash": o.tool_hash,
+        "ref": o.ref,
+        "reason": o.reason,
+        "created_at": o.created_at,
+        "expires_at": o.expires_at,
+        "revoked_at": o.revoked_at,
+        "active": o.active(now),
+    }
+
+
+def admin_routes(
+    service: VerificationService,
+    enforcer: Enforcer,
+    store: Store,
+    overrides: OverrideRegistry | None = None,
+) -> list[Route]:
     async def pending(request: Request) -> JSONResponse:
         return JSONResponse([verdict_json(v) for v in service.pending()])
 
@@ -102,7 +126,34 @@ def admin_routes(service: VerificationService, enforcer: Enforcer, store: Store)
         await service.release(name, actor="admin-api")
         return JSONResponse({"server": name, "released": True})
 
-    return [
+    async def list_overrides(request: Request) -> JSONResponse:
+        now = enforcer.clock()
+        return JSONResponse([override_json(o, now) for o in overrides.all()])
+
+    async def revoke_override(request: Request) -> JSONResponse:
+        override_id = request.path_params["id"]
+        now = enforcer.clock()
+        revoked = overrides.revoke(override_id, now)
+        if revoked is None:
+            return JSONResponse({"error": "없거나 이미 회수된 임시 허용"}, status_code=404)
+        await store.revoke_override(override_id, now)
+        await store.log(
+            AuditEvent(
+                "override_revoked",
+                revoked.server,
+                revoked.tool,
+                {"id": revoked.id, "user": revoked.user, "ref": revoked.ref, "actor": "admin-api"},
+            )
+        )
+        return JSONResponse(override_json(revoked, now))
+
+    extra = []
+    if overrides is not None:
+        extra = [
+            Route("/admin/overrides", list_overrides),
+            Route("/admin/overrides/{id}", revoke_override, methods=["DELETE"]),
+        ]
+    return extra + [
         Route("/admin/servers/{name}/release", release, methods=["POST"]),
         Route("/admin/pending", pending),
         Route("/admin/verdicts", verdicts),

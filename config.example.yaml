@@ -23,8 +23,14 @@ gateway:
   # allowed_hosts: [gw.example.com]   # 공개 배포 시 Host 헤더 허용 목록
   max_result_bytes: 1000000          # 도구 결과 크기 상한
   arg_inspection: true               # 위험한 인자 값(~/.ssh 등)으로의 호출 차단
+  # 브레이크 글래스(docs/break-glass.md): 사용자가 자기 '승인 대기' 거부를 잠시 직접 허용. 기본 꺼짐
+  break_glass_enabled: false
+  break_glass_ttl_hours: 8        # 임시 허용 만료(시간), 상한 24
+  break_glass_daily_limit: 3      # 사용자별 최근 24시간 횟수
+  break_glass_allow_write: false  # false면 읽기로 판별된 도구만 허용
 # 비밀값은 환경변수로 준다:
-#   LINKUD_AUTH_TOKENS   에이전트 접속 토큰(쉼표 구분). 루프백이 아닌 주소에 바인딩하면 필수
+#   LINKUD_AUTH_TOKENS   에이전트 접속 토큰(쉼표 구분, '이름=토큰' 또는 '토큰'(익명)). 루프백이 아닌 주소에 바인딩하면 필수
+#   LINKUD_OVERRIDE_TOKENS  브레이크 글래스용 사람 전용 토큰('이름=토큰'). 에이전트 설정에 넣지 말 것
 #   LINKUD_ADMIN_TOKENS  관리 API(/admin) 토큰. 없으면 관리 API를 열지 않음
 #   SLACK_WEBHOOK_URL, SLACK_SIGNING_SECRET, SLACK_APPROVERS  Slack 승인(선택)
 

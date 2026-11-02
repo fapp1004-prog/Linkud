@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from linkud.enforcement.overrides import Override
 from linkud.models import ToolVerdict
 from linkud.store.base import AuditEvent, DuplicateRef, verdict_key
 
@@ -28,6 +29,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self.verdicts: list[ToolVerdict] = []
         self.events: list[AuditEvent] = []
+        self.overrides: dict[str, Override] = {}
 
     async def save_verdict(self, verdict: ToolVerdict) -> None:
         self.verdicts.append(verdict)
@@ -58,3 +60,16 @@ class MemoryStore:
         removed = len(self.events) - len(kept)
         self.events = kept
         return removed
+
+    async def save_override(self, override: Override) -> None:
+        self.overrides[override.id] = override
+
+    async def revoke_override(self, override_id: str, at: float) -> bool:
+        o = self.overrides.get(override_id)
+        if o is None or o.revoked_at is not None:
+            return False
+        self.overrides[override_id] = Override(**{**o.__dict__, "revoked_at": at})
+        return True
+
+    async def load_overrides(self, since: float) -> list[Override]:
+        return [o for o in self.overrides.values() if o.created_at >= since]
