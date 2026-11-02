@@ -166,11 +166,15 @@ H="Authorization: Bearer <관리 토큰>"
 curl -H "$H" https://gw.example.com/admin/pending          # 승인 대기 도구와 근거
 curl -H "$H" https://gw.example.com/admin/servers          # 서버 등급
 curl -H "$H" "https://gw.example.com/admin/audit?limit=50" # 감사 로그
+curl -H "$H" "https://gw.example.com/admin/audit?ref=LK-XXXXXXXX"  # 사용자가 알려 준 참조 번호의 거부 원인
 curl -H "$H" -X POST https://gw.example.com/admin/decisions \
   -d '{"server":"s","tool":"t","tool_hash":"<pending의 해시>","tier":"partial","note":"검토함"}'
 ```
 
 확정은 그 정의(해시)에만 적용된다. 승인 뒤 설명이 바뀌면 다시 검증 경로를 탄다.
+
+에이전트에게는 거부 원인을 보내지 않는다. 사용자가 "[Linkud] 이 도구는 지금 사용할 수 없습니다. … LK-XXXXXXXX"를 받아
+문의하면, 그 참조 번호로 `/admin/audit?ref=`를 조회해 원인(`detail.code`·`detail.reason`·등급)을 확인한다.
 
 **Slack 승인 버튼**
 1. Slack 앱을 만들고 Incoming Webhooks를 켜서 채널 웹훅 URL을 받는다 → `/linkud/SLACK_WEBHOOK_URL`

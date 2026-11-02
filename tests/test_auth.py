@@ -69,8 +69,11 @@ async def test_oversized_result_is_not_forwarded():
 
             return types.CallToolResult(content=[types.TextContent(type="text", text="x" * 5000)])
 
-    gw, _ = make_gateway([Big("a", [tool("x")])])
+    gw, store = make_gateway([Big("a", [tool("x")])])
     gw.max_result_bytes = 1000
     await gw.list_tools()
     result = await gw.call_tool("a__x", {})
-    assert result.is_error and "too large" in result.content[0].text
+    # A-2: 가용성 오류도 고정 문구, 원인은 감사 로그(call_failed)에
+    assert result.is_error and "too large" not in result.content[0].text
+    ref = result.content[0].text.rsplit(" ", 1)[-1]
+    assert (await store.find_by_ref(ref)).detail["code"] == "too_large"

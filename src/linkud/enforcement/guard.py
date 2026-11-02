@@ -9,24 +9,37 @@ LLM·네트워크를 부르지 않는다(런타임 경로 분리).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import mcp.types as types
 
 from linkud.enforcement.arguments import dangerous_arguments
+from linkud.enforcement.refs import new_ref
 from linkud.models import Tier, ToolVerdict
-from linkud.store.base import AuditEvent, Cache, Store, verdict_key
+from linkud.store.base import AuditEvent, Cache, DuplicateRef, Store, verdict_key
 from linkud.verify.decision import permits, server_tier
 from linkud.verify.hashing import tool_hash
 from linkud.verify.service import VerificationService
+
+logger = logging.getLogger(__name__)
+
+
+# 에이전트에게 돌려주는 유일한 거부 문구. 원인(거부 코드·등급·이유)은 감사 로그에만 남긴다
+DENY_TEMPLATE = "[Linkud] 이 도구는 지금 사용할 수 없습니다. 관리자 문의 시 참조 번호: {ref}"
+_REF_ATTEMPTS = 5
 
 
 @dataclass(frozen=True)
 class CallDecision:
     allowed: bool
     reason: str
+    # 거부 코드 (docs/deny-response.md 3장). 허용이면 None
+    code: str | None = None
+    ref: str | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
 
 
 class Enforcer:
@@ -46,6 +59,8 @@ class Enforcer:
         self._seen: dict[str, dict[str, str]] = {}
         # 서버 → 마지막으로 계산한 등급 (변경 시 감사 로그용)
         self._tiers: dict[str, Tier | None] = {}
+        # 서버 → 마지막 목록에서 이름이 겹친 도구 수. 호출 가드도 목록과 같은 서버 등급을 쓰게 한다
+        self._duplicates: dict[str, int] = {}
 
     async def visible_tools(self, server: str, tools: Sequence[types.Tool]) -> list[types.Tool]:
         names = [t.name for t in tools]
@@ -55,6 +70,7 @@ class Enforcer:
         unique = [t for t in tools if t.name not in duplicated]
         verdicts = await self.service.verdicts(server, unique)
         self._seen[server] = {t.name: tool_hash(t) for t in unique}
+        self._duplicates[server] = len(duplicated)
 
         listed: list[ToolVerdict | None] = [verdicts.get(t.name) for t in unique]
         tier = self._effective_tier(server, server_tier(listed + [None] * len(duplicated)))
@@ -78,31 +94,74 @@ class Enforcer:
         seen = self._seen.get(server, {})
         return {name: await self.cache.get(verdict_key(server, h)) for name, h in seen.items()}
 
+    async def record_denial(
+        self,
+        server: str,
+        tool: str,
+        code: str,
+        reason: str,
+        *,
+        kind: str = "call_denied",
+        detail: dict[str, Any] | None = None,
+    ) -> str:
+        """거부를 감사 로그에 남기고 참조 번호를 돌려준다. 번호가 겹치면 새로 뽑아 다시 기록한다."""
+        body = {"code": code, "reason": reason, **(detail or {})}
+        for _ in range(_REF_ATTEMPTS):
+            ref = new_ref()
+            try:
+                await self.store.log(AuditEvent(kind, server, tool[:200], body, ref=ref))
+                return ref
+            except DuplicateRef:
+                continue
+        # 저장소가 계속 겹친다고 하면 기록 없이도 거부는 그대로 한다(fail-closed)
+        logger.error("참조 번호를 기록하지 못함: %s/%s", server, tool[:200])
+        return ref
+
+    async def _deny(
+        self, server: str, tool: str, code: str, reason: str, detail: dict[str, Any]
+    ) -> CallDecision:
+        ref = await self.record_denial(server, tool, code, reason, detail=detail)
+        return CallDecision(False, reason, code, ref, detail)
+
     async def check_call(
         self, server: str, tool: str, arguments: dict[str, Any] | None = None
     ) -> CallDecision:
         verdicts = await self._cached_verdicts(server)
-        tier = self._effective_tier(server, server_tier(verdicts.values()))
         verdict = verdicts.get(tool)
+        h = self._seen.get(server, {}).get(tool)
+        # 이름이 겹친 도구는 판정 없음(승인 대기)으로 쳐서 목록 필터와 같은 서버 등급을 쓴다
+        raw_tier = server_tier(list(verdicts.values()) + [None] * self._duplicates.get(server, 0))
+        tier = self._effective_tier(server, raw_tier)
+        detail: dict[str, Any] = {
+            "hash": h,
+            "tier": tier.value if tier else None,
+            "tool_tier": verdict.tier.value if verdict else None,
+        }
         if tool not in verdicts:
-            decision = CallDecision(False, "목록에서 확인되지 않은 도구")
-        elif verdict is None:
-            decision = CallDecision(False, "판정 없음 (검증 실패 또는 진행 중)")
-        elif not permits(tier, verdict):
+            return await self._deny(
+                server, tool, "not_listed", "목록에서 확인되지 않은 도구", detail
+            )
+        # 묶인 서버는 검증을 건너뛰어 판정이 비어 있을 수 있으므로 판정 없음보다 먼저 본다
+        if self.service.is_throttled(server):
+            return await self._deny(server, tool, "throttled", "재검증 상한으로 묶인 서버", detail)
+        if verdict is None:
+            return await self._deny(
+                server, tool, "no_verdict", "판정 없음 (검증 실패 또는 진행 중)", detail
+            )
+        if not permits(tier, verdict):
             label = tier.label if tier else "없음"
             kind = "읽기" if verdict.is_read else "쓰기"
-            decision = CallDecision(False, f"서버 등급 {label}: {kind} 도구 호출 불가")
-        elif self.inspect_arguments and (danger := dangerous_arguments(arguments)):
-            decision = CallDecision(False, f"위험한 인자: {', '.join(danger)}")
-        else:
-            decision = CallDecision(True, f"서버 등급 {tier.label if tier else ''}")
-        await self.store.log(
-            AuditEvent(
-                "call_allowed" if decision.allowed else "call_denied",
-                server,
-                tool,
-                {"reason": decision.reason, "hash": self._seen.get(server, {}).get(tool)},
+            detail["is_read"] = verdict.is_read
+            return await self._deny(
+                server, tool, "tier", f"서버 등급 {label}: {kind} 도구 호출 불가", detail
             )
+        if self.inspect_arguments and (danger := dangerous_arguments(arguments)):
+            return await self._deny(
+                server, tool, "dangerous_args", f"위험한 인자: {', '.join(danger)}", detail
+            )
+        decision = CallDecision(True, f"서버 등급 {tier.label if tier else ''}")
+        await self.store.log(
+            AuditEvent("call_allowed", server, tool, {"reason": decision.reason, "hash": h})
         )
         return decision
 

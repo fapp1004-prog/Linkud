@@ -34,6 +34,12 @@ class AuditEvent:
     tool: str
     detail: dict[str, Any] = field(default_factory=dict)
     ts: float = 0.0
+    # 거부 참조 번호(LK-...). 있으면 저장소 안에서 유일해야 한다
+    ref: str | None = None
+
+
+class DuplicateRef(Exception):
+    """이미 쓰인 참조 번호로 기록하려 할 때. 호출한 쪽이 새 번호로 다시 기록한다."""
 
 
 class Store(Protocol):
@@ -45,7 +51,13 @@ class Store(Protocol):
         """(서버, 해시)마다 가장 최근 판정. 시작 시 캐시를 채우는 데 쓴다."""
         ...
 
-    async def log(self, event: AuditEvent) -> None: ...
+    async def log(self, event: AuditEvent) -> None:
+        """감사 로그를 남긴다. `event.ref`가 이미 있으면 DuplicateRef."""
+        ...
+
+    async def find_by_ref(self, ref: str) -> AuditEvent | None:
+        """참조 번호로 감사 기록 하나를 찾는다."""
+        ...
 
     async def audit_log(self, limit: int = 100) -> list[AuditEvent]: ...
 
