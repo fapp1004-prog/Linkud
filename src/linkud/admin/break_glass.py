@@ -10,10 +10,11 @@ from __future__ import annotations
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from importlib import resources
 
 import anyio
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from linkud.config import GatewayConfig
@@ -26,7 +27,32 @@ from linkud.store.base import AuditEvent, Store
 
 DENY_MESSAGE = "이 참조 번호로는 임시 허용할 수 없습니다."
 # 인증 미들웨어를 거치지 않는 경로 (처리기가 직접 인증하거나 비밀이 없는 정적 파일)
-OVERRIDE_PATHS = ("/override",)
+OVERRIDE_PATHS = ("/override", "/override/app.js", "/override/app.css")
+
+# 페이지 보안 헤더: 인라인 스크립트·스타일 금지, 같은 출처만, 프레임 금지, 캐시·리퍼러 없음
+_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+    "img-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
+)
+_PAGE_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Cache-Control": "no-store",
+}
+_STATIC = resources.files("linkud.admin") / "static"
+
+
+def _static(name: str, media_type: str) -> Callable[[Request], Awaitable[Response]]:
+    body = (_STATIC / name).read_bytes()  # 정적 파일: 요청 값을 끼워 넣지 않는다
+
+    async def handler(request: Request) -> Response:
+        return Response(body, media_type=media_type, headers=_PAGE_HEADERS)
+
+    return handler
+
+
 REASON_MIN, REASON_MAX = 10, 500
 REF_MAX_AGE = 86400  # 24시간보다 오래된 거부 기록으로는 허용하지 않는다
 DAY = 86400
@@ -127,4 +153,9 @@ def break_glass_routes(
             }
         )
 
-    return [Route("/override", grant, methods=["POST"])]
+    return [
+        Route("/override", _static("override.html", "text/html; charset=utf-8"), methods=["GET"]),
+        Route("/override", grant, methods=["POST"]),
+        Route("/override/app.js", _static("override.js", "text/javascript; charset=utf-8")),
+        Route("/override/app.css", _static("override.css", "text/css; charset=utf-8")),
+    ]

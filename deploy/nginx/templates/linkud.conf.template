@@ -47,6 +47,19 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
+    # 브레이크 글래스 사람 전용 페이지 (break_glass_enabled일 때만 게이트웨이가 응답)
+    location = /override {
+        limit_req zone=mcp burst=5 nodelay;
+        client_max_body_size 8k;
+        proxy_pass http://gateway:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    location ^~ /override/ {
+        limit_req zone=mcp burst=10 nodelay;
+        proxy_pass http://gateway:8000;
+        proxy_set_header Host $host;
+    }
     location = /slack/actions {
         limit_req zone=mcp burst=10 nodelay;
         proxy_pass http://gateway:8000;

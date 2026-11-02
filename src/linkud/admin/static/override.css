@@ -1,0 +1,12 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #f6f6f4; color: #1d1d1b; }
+main { max-width: 34rem; margin: 2rem auto; padding: 0 1rem; }
+h1 { font-size: 1.4rem; }
+.warn { color: #8a3b00; }
+form { display: grid; gap: 0.5rem; }
+input, textarea, button { font: inherit; padding: 0.5rem; }
+button { cursor: pointer; }
+#result { white-space: pre-wrap; font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  body { background: #1b1b1a; color: #ecece8; }
+  .warn { color: #f0a868; }
+}
