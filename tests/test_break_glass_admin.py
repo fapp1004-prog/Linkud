@@ -89,3 +89,34 @@ async def test_slack_notified_on_grant(monkeypatch):
     override_msgs = [m for m in sent if "임시 허용" in m.get("text", "")]
     assert len(override_msgs) == 1
     assert "<!here>" not in json.dumps(override_msgs[0], ensure_ascii=False)
+
+
+async def test_override_survives_gateway_restart_with_sqlite(monkeypatch, tmp_path):
+    from linkud.config import parse_config
+    from linkud.proxy.gateway import create_app
+    from linkud.store.sqlite import SqliteStore
+    from tests.helpers import FakeDownstream, pipeline, tool
+    from tests.test_break_glass_api import RO, SUSPICIOUS, env
+
+    env(monkeypatch)
+    cfg = parse_config({"gateway": {"break_glass_enabled": True}})
+
+    def build():
+        ds = FakeDownstream("s", [tool("get_odd", "Get odd.", annotations=RO)])
+        return create_app(
+            cfg,
+            downstreams=[ds],
+            store=SqliteStore(tmp_path / "g.db"),
+            verifier=pipeline(SUSPICIOUS),
+        )
+
+    first = build()
+    async with serve(first) as url, httpx.AsyncClient() as http:
+        ref = await deny_ref(first, "s__get_odd", "alice")
+        assert (await post(http, url, "human-alice", ref)).status_code == 200
+
+    second = build()  # 재시작: 새 프로세스처럼 메모리는 비어 있고 SQLite만 남음
+    async with serve(second):
+        gw = second.state.gateway
+        assert [t.name for t in await gw.list_tools("alice")] == ["s__get_odd"]
+        assert await gw.list_tools("bob") == []
