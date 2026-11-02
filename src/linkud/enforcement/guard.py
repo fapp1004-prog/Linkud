@@ -59,6 +59,8 @@ class Enforcer:
         self._seen: dict[str, dict[str, str]] = {}
         # 서버 → 마지막으로 계산한 등급 (변경 시 감사 로그용)
         self._tiers: dict[str, Tier | None] = {}
+        # 서버 → 마지막 목록에서 이름이 겹친 도구 수. 호출 가드도 목록과 같은 서버 등급을 쓰게 한다
+        self._duplicates: dict[str, int] = {}
 
     async def visible_tools(
         self, server: str, tools: Sequence[types.Tool], user: str | None = None
@@ -70,6 +72,7 @@ class Enforcer:
         unique = [t for t in tools if t.name not in duplicated]
         verdicts = await self.service.verdicts(server, unique)
         self._seen[server] = {t.name: tool_hash(t) for t in unique}
+        self._duplicates[server] = len(duplicated)
 
         listed: list[ToolVerdict | None] = [verdicts.get(t.name) for t in unique]
         tier = self._effective_tier(server, server_tier(listed + [None] * len(duplicated)))
@@ -132,7 +135,8 @@ class Enforcer:
         verdicts = await self._cached_verdicts(server)
         verdict = verdicts.get(tool)
         h = self._seen.get(server, {}).get(tool)
-        raw_tier = server_tier(verdicts.values())
+        # 이름이 겹친 도구는 판정 없음(승인 대기)으로 쳐서 목록 필터와 같은 서버 등급을 쓴다
+        raw_tier = server_tier(list(verdicts.values()) + [None] * self._duplicates.get(server, 0))
         tier = self._effective_tier(server, raw_tier)
         detail: dict[str, Any] = {
             "user": user,

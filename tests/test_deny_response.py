@@ -189,3 +189,14 @@ async def test_same_text_over_http_for_unknown_and_blocked():
             ref = _ref(result)
             texts.append(result.content[0].text.replace(ref, ""))
         assert len(set(texts)) == 1
+
+
+async def test_duplicate_named_server_blocks_calls_to_other_tools():
+    """이름이 겹치는 도구가 있는 서버는 목록에서 전부 숨기므로, 다른 도구도 이름으로 호출할 수 없어야 한다."""
+    ds = FakeDownstream("s", [tool("a", "1"), tool("a", "2"), tool("b", "B.")])
+    gw, store = make_gateway([ds])
+    assert await gw.list_tools() == []
+    result = await gw.call_tool("s__b", {})
+    ref = _ref(result)
+    assert ds.calls == []
+    assert (await store.find_by_ref(ref)).detail["code"] == "tier"
