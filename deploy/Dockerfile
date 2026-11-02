@@ -14,12 +14,19 @@ RUN uv sync --frozen --no-dev --no-editable
 
 # 공급망 검증용 syft를 수정된 Go 툴체인으로 직접 빌드한다.
 # 배포 바이너리(최신 1.55.0 포함)가 Go 1.26.8로 빌드돼 stdlib CVE(crypto/x509·crypto/tls·net/http, HIGH)가
-# Trivy에 잡히는데 아직 고친 릴리스가 없다. go install은 Go 체크섬 DB(sumdb)로 모듈 무결성을 확인한다.
+# Trivy에 잡히는데 아직 고친 릴리스가 없다. Go 체크섬 DB(sumdb)가 모듈 무결성을 확인한다.
 # golang:1.27.3-bookworm (다이제스트 고정, 2026-10-27 기준)
 FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS syft
 ARG SYFT_VERSION=1.55.0
+# syft 1.55.0이 끌어오는 go-jose v4.1.5에 CVE-2026-116587(HIGH, 수정판 4.1.6)이 있어 수정판으로 올린다.
+# 임시 모듈에서 syft와 고친 의존성을 함께 요구해 빌드한다(모듈 무결성은 go.sum·sumdb가 확인)
+ARG GO_JOSE_VERSION=4.1.7
 ENV CGO_ENABLED=0 GOFLAGS=-trimpath
-RUN go install -ldflags "-s -w" "github.com/anchore/syft/cmd/syft@v${SYFT_VERSION}"
+WORKDIR /build
+RUN go mod init linkud.local/syft-build \
+    && go get "github.com/anchore/syft/cmd/syft@v${SYFT_VERSION}" \
+              "github.com/go-jose/go-jose/v4@v${GO_JOSE_VERSION}" \
+    && go build -ldflags "-s -w" -o /go/bin/syft github.com/anchore/syft/cmd/syft
 
 FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
 RUN useradd --uid 10001 --create-home app \
