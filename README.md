@@ -80,6 +80,9 @@ AI 에이전트가 MCP 서버의 도구를 **연결하기 전에** 검증하고,
 자세한 분석은 [docs/threat-model.md](docs/threat-model.md)의 STRIDE 표.
 
 - **도구 응답 안의 인젝션은 잡지 않는다** (기획서 범위 밖). 설명은 그대로 두고 서버 동작만 바꾸는 공격도 마찬가지.
+- **거부 응답은 원인을 알려 주지 않는다.** 에이전트에게는 "[Linkud] 이 도구는 지금 사용할 수 없습니다. 관리자 문의 시
+  참조 번호: LK-XXXXXXXX"만 가고, 원인은 관리자가 `GET /admin/audit?ref=...`로 찾는다 ([docs/deny-response.md](docs/deny-response.md)).
+  응답 시간 차이로 정책 통과 여부를 짐작하는 것은 막지 못한다.
 - **LLM 판별 성능은 아직 측정하지 않았다.** 규칙에 없는 자연스러운 설득 문장은 LLM에 의존한다.
 - **판별 프롬프트의 "MCPTox 3요소"(트리거/악성 행위/은닉) 해석은 원문과 대조하지 못했다(미확인).**
 - 접속 토큰은 정적 Bearer 토큰이다(OAuth 미구현). 교체 절차는 [docs/deploy.md](docs/deploy.md) 4-1.
@@ -100,6 +103,7 @@ tests/          테스트 (fixtures/poisoned_servers: 오염 테스트 서버)
 eval/           탐지·지연 평가 스크립트
 deploy/         Dockerfile, compose, nginx, Actions
 docs/기획서.md   전체 기획 (설계 판단의 기준)
+docs/deny-response.md  거부 응답·참조 번호 설계
 ```
 
 ## 개발
