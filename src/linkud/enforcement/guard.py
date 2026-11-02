@@ -60,7 +60,9 @@ class Enforcer:
         # 서버 → 마지막으로 계산한 등급 (변경 시 감사 로그용)
         self._tiers: dict[str, Tier | None] = {}
 
-    async def visible_tools(self, server: str, tools: Sequence[types.Tool]) -> list[types.Tool]:
+    async def visible_tools(
+        self, server: str, tools: Sequence[types.Tool], user: str | None = None
+    ) -> list[types.Tool]:
         names = [t.name for t in tools]
         duplicated = {n for n in names if names.count(n) > 1}
         # 이름이 겹치는 도구는 어떤 정의가 호출될지 알 수 없으므로 서버 전체를 승인 대기로 본다.
@@ -121,7 +123,11 @@ class Enforcer:
         return CallDecision(False, reason, code, ref, detail)
 
     async def check_call(
-        self, server: str, tool: str, arguments: dict[str, Any] | None = None
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, Any] | None = None,
+        user: str | None = None,
     ) -> CallDecision:
         verdicts = await self._cached_verdicts(server)
         verdict = verdicts.get(tool)
@@ -129,6 +135,7 @@ class Enforcer:
         raw_tier = server_tier(verdicts.values())
         tier = self._effective_tier(server, raw_tier)
         detail: dict[str, Any] = {
+            "user": user,
             "hash": h,
             "tier": tier.value if tier else None,
             "tool_tier": verdict.tier.value if verdict else None,

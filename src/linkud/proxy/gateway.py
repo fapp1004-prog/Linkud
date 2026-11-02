@@ -30,7 +30,14 @@ from linkud.admin.slack import SlackNotifier, slack_routes
 from linkud.config import ConfigError, GatewayConfig
 from linkud.enforcement.guard import DENY_TEMPLATE, Enforcer
 from linkud.proxy import naming
-from linkud.proxy.auth import ADMIN_TOKENS_ENV, TOKENS_ENV, BearerAuth, load_tokens
+from linkud.proxy.auth import (
+    ADMIN_TOKENS_ENV,
+    TOKENS_ENV,
+    BearerAuth,
+    load_identities,
+    load_tokens,
+    request_user,
+)
 from linkud.proxy.downstream import Downstream, DownstreamUnavailable, HttpDownstream
 from linkud.store.base import Store
 from linkud.store.memory import MemoryCache
@@ -70,21 +77,21 @@ class Gateway:
         # 노출 이름 → 마지막 목록에서 에이전트에게 보여준 inputSchema
         self._schemas: dict[str, dict[str, Any]] = {}
 
-    async def _list_one(self, ds: Downstream) -> list[types.Tool]:
+    async def _list_one(self, ds: Downstream, user: str | None = None) -> list[types.Tool]:
         try:
             tools = await ds.list_tools()
-            visible = await self.enforcer.visible_tools(ds.name, tools)
+            visible = await self.enforcer.visible_tools(ds.name, tools, user)
         except (DownstreamUnavailable, MCPError, TimeoutError) as exc:
             # 목록을 못 받은 서버의 도구는 보여주지 않는다(fail-closed)
             logger.warning("도구 목록 실패: %s (%s)", ds.name, type(exc).__name__)
             return []
         return [t.model_copy(update={"name": naming.qualify(ds.name, t.name)}) for t in visible]
 
-    async def list_tools(self) -> list[types.Tool]:
+    async def list_tools(self, user: str | None = None) -> list[types.Tool]:
         results: dict[str, list[types.Tool]] = {}
 
         async def collect(ds: Downstream) -> None:
-            results[ds.name] = await self._list_one(ds)
+            results[ds.name] = await self._list_one(ds, user)
 
         async with anyio.create_task_group() as tg:
             for ds in self.downstreams.values():
@@ -102,7 +109,9 @@ class Gateway:
         """
         return self._schemas.get(name)
 
-    async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any] | None, user: str | None = None
+    ) -> types.CallToolResult:
         """정책 거부와 가용성 오류는 원인과 상관없이 같은 문구 + 참조 번호만 돌려준다.
 
         문구가 원인마다 다르면 에이전트 쪽에서 어느 필터에 걸렸는지 알아내는 오라클이 된다
@@ -110,20 +119,24 @@ class Gateway:
         """
         parts = naming.split(name)
         if parts is None:
-            ref = await self.enforcer.record_denial("*", name, "bad_name", "노출 이름 형식이 틀림")
+            ref = await self.enforcer.record_denial(
+                "*", name, "bad_name", "노출 이름 형식이 틀림", detail={"user": user}
+            )
             return deny_result(ref)
         server, tool = parts
         ds = self.downstreams.get(server)
         if ds is None:
-            ref = await self.enforcer.record_denial("*", name, "unknown_server", "설정에 없는 서버")
+            ref = await self.enforcer.record_denial(
+                "*", name, "unknown_server", "설정에 없는 서버", detail={"user": user}
+            )
             return deny_result(ref)
-        decision = await self.enforcer.check_call(ds.name, tool, arguments)
+        decision = await self.enforcer.check_call(ds.name, tool, arguments, user)
         if not decision.allowed:
             return deny_result(decision.ref or "")
         try:
             result = await ds.call_tool(tool, arguments)
         except DownstreamUnavailable:
-            return await self._fail(server, tool, "unavailable", "다운스트림 연결 실패")
+            return await self._fail(server, tool, "unavailable", "다운스트림 연결 실패", user)
         except MCPError as exc:
             # 다운스트림이 정한 오류 문자열은 에이전트에게 넘기지 않고 감사 로그에만 (길이 제한)
             return await self._fail(
@@ -131,16 +144,21 @@ class Gateway:
                 tool,
                 "downstream_error",
                 f"다운스트림 MCP 오류 {exc.code}: {exc.message[:300]}",
+                user,
             )
         # 다운스트림 서버 정보 등 메타데이터는 에이전트에게 넘기지 않는다
         result = result.model_copy(update={"meta": None})
         if len(result.model_dump_json(by_alias=True)) > self.max_result_bytes:
             logger.warning("도구 결과 크기 상한 초과: %s", name)
-            return await self._fail(server, tool, "too_large", "도구 결과 크기 상한 초과")
+            return await self._fail(server, tool, "too_large", "도구 결과 크기 상한 초과", user)
         return result
 
-    async def _fail(self, server: str, tool: str, code: str, reason: str) -> types.CallToolResult:
-        ref = await self.enforcer.record_denial(server, tool, code, reason, kind="call_failed")
+    async def _fail(
+        self, server: str, tool: str, code: str, reason: str, user: str | None
+    ) -> types.CallToolResult:
+        ref = await self.enforcer.record_denial(
+            server, tool, code, reason, kind="call_failed", detail={"user": user}
+        )
         return deny_result(ref)
 
 
@@ -148,12 +166,12 @@ def build_server(gateway: Gateway, name: str = "linkud-gateway") -> Server[Any]:
     async def on_list_tools(
         ctx: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
-        return types.ListToolsResult(tools=await gateway.list_tools())
+        return types.ListToolsResult(tools=await gateway.list_tools(request_user(ctx.request)))
 
     async def on_call_tool(
         ctx: ServerRequestContext[Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult:
-        return await gateway.call_tool(params.name, params.arguments)
+        return await gateway.call_tool(params.name, params.arguments, request_user(ctx.request))
 
     return Server(
         name,
@@ -291,7 +309,7 @@ def create_app(
     app.router.lifespan_context = lifespan
     app.state.gateway = gateway
 
-    tokens = load_tokens()
+    tokens = load_identities()
     if not tokens:
         if config.host not in ("127.0.0.1", "localhost", "::1"):
             # 공개 주소에 인증 없이 뜨지 않는다 (fail-closed)
