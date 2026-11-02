@@ -103,6 +103,11 @@ def test_image_scan_targets_vulnerabilities():
 def test_syft_built_from_source_with_pinned_go():
     text = (ROOT / "deploy" / "Dockerfile").read_text()
     assert re.search(r"FROM golang:[\d.]+-\w+@sha256:[0-9a-f]{64} AS syft", text)
-    assert "go install" in text and "github.com/anchore/syft/cmd/syft@v" in text
+    assert "github.com/anchore/syft/cmd/syft@v" in text
+    # syft가 끌어오는 취약한 의존성(go-jose < 4.1.6, CVE-2026-116587)은 수정판으로 올려서 빌드한다
+    m = re.search(r"ARG GO_JOSE_VERSION=4\.1\.(\d+)", text)
+    assert m and int(m.group(1)) >= 6
+    assert "github.com/go-jose/go-jose/v4@v${GO_JOSE_VERSION}" in text
+    assert "go build" in text
     assert "COPY --from=syft" in text
     assert "SYFT_CHECK_FOR_APP_UPDATE=false" in text  # 실행 중 외부 업데이트 확인 끔
