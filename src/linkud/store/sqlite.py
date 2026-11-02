@@ -15,6 +15,7 @@ from pathlib import Path
 
 import anyio
 
+from linkud.enforcement.overrides import Override
 from linkud.models import Tier, ToolVerdict
 from linkud.store.base import AuditEvent, DuplicateRef
 
@@ -40,6 +41,19 @@ CREATE TABLE IF NOT EXISTS audit (
     detail TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
+CREATE TABLE IF NOT EXISTS overrides (
+    id TEXT PRIMARY KEY,
+    user TEXT NOT NULL,
+    server TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    tool_hash TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    revoked_at REAL
+);
+CREATE INDEX IF NOT EXISTS overrides_created ON overrides (created_at);
 """
 
 
@@ -154,3 +168,38 @@ class SqliteStore:
     def _purge_audit(self, before: float) -> int:
         with self._lock, self._conn:
             return self._conn.execute("DELETE FROM audit WHERE ts < ?", (before,)).rowcount
+
+    async def save_override(self, override: Override) -> None:
+        await anyio.to_thread.run_sync(self._save_override, override)
+
+    def _save_override(self, o: Override) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO overrides (id, user, server, tool, tool_hash, ref, reason, created_at,"
+                " expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (o.id, o.user, o.server, o.tool, o.tool_hash, o.ref, o.reason, o.created_at,
+                 o.expires_at, o.revoked_at),
+            )  # fmt: skip
+
+    async def revoke_override(self, override_id: str, at: float) -> bool:
+        return await anyio.to_thread.run_sync(self._revoke_override, override_id, at)
+
+    def _revoke_override(self, override_id: str, at: float) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE overrides SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (at, override_id),
+            )
+            return cur.rowcount == 1
+
+    async def load_overrides(self, since: float) -> list[Override]:
+        return await anyio.to_thread.run_sync(self._load_overrides, since)
+
+    def _load_overrides(self, since: float) -> list[Override]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, user, server, tool, tool_hash, ref, reason, created_at, expires_at,"
+                " revoked_at FROM overrides WHERE created_at >= ? ORDER BY created_at",
+                (since,),
+            ).fetchall()
+        return [Override(*r) for r in rows]

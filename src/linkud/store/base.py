@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from linkud.models import ToolVerdict
+
+if TYPE_CHECKING:
+    from linkud.enforcement.overrides import Override
 
 
 def verdict_key(server: str, tool_hash: str) -> str:
@@ -60,6 +63,18 @@ class Store(Protocol):
         ...
 
     async def audit_log(self, limit: int = 100) -> list[AuditEvent]: ...
+
+    async def save_override(self, override: Override) -> None:
+        """브레이크 글래스 임시 허용을 저장한다."""
+        ...
+
+    async def revoke_override(self, override_id: str, at: float) -> bool:
+        """회수 시각을 남긴다. 없거나 이미 회수됐으면 False."""
+        ...
+
+    async def load_overrides(self, since: float) -> list[Override]:
+        """since 이후에 만든 임시 허용 (시작 시 복원용)."""
+        ...
 
     async def purge_audit(self, before: float) -> int:
         """`before`(epoch 초)보다 오래된 감사 로그를 지우고 지운 행 수를 돌려준다."""
