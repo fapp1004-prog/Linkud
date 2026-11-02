@@ -55,9 +55,13 @@ async def test_dangerous_call_blocked_even_for_trusted_tool():
     gw, store = make_gateway([ds])
     await gw.list_tools()
     result = await gw.call_tool("s__read_file", {"path": "~/.ssh/id_rsa"})
-    assert result.is_error and "dangerous argument" in result.content[0].text
+    # A-2: 에이전트에게는 고정 문구만, 원인은 감사 로그에
+    assert result.is_error
+    assert result.content[0].text.startswith("[Linkud] 이 도구는 지금 사용할 수 없습니다.")
+    assert "ssh" not in result.content[0].text
     assert ds.calls == []
     denied = [e for e in store.events if e.kind == "call_denied"][-1]
+    assert denied.detail["code"] == "dangerous_args" and denied.ref
     assert "ssh" in denied.detail["reason"] and "id_rsa" not in json.dumps(denied.detail)
     assert not (await gw.call_tool("s__read_file", {"path": "README.md"})).is_error
 

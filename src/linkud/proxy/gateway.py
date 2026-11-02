@@ -28,7 +28,7 @@ from linkud import __version__
 from linkud.admin.api import admin_routes
 from linkud.admin.slack import SlackNotifier, slack_routes
 from linkud.config import ConfigError, GatewayConfig
-from linkud.enforcement.guard import Enforcer
+from linkud.enforcement.guard import DENY_TEMPLATE, Enforcer
 from linkud.proxy import naming
 from linkud.proxy.auth import ADMIN_TOKENS_ENV, TOKENS_ENV, BearerAuth, load_tokens
 from linkud.proxy.downstream import Downstream, DownstreamUnavailable, HttpDownstream
@@ -48,9 +48,9 @@ from linkud.verify.supply.sbom import SyftSbom
 logger = logging.getLogger(__name__)
 
 
-def _error_result(message: str) -> types.CallToolResult:
+def deny_result(ref: str) -> types.CallToolResult:
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=message)], is_error=True
+        content=[types.TextContent(type="text", text=DENY_TEMPLATE.format(ref=ref))], is_error=True
     )
 
 
@@ -103,27 +103,45 @@ class Gateway:
         return self._schemas.get(name)
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
+        """정책 거부와 가용성 오류는 원인과 상관없이 같은 문구 + 참조 번호만 돌려준다.
+
+        문구가 원인마다 다르면 에이전트 쪽에서 어느 필터에 걸렸는지 알아내는 오라클이 된다
+        (docs/deny-response.md). 원래 이유는 감사 로그(call_denied·call_failed)에만 남긴다.
+        """
         parts = naming.split(name)
-        ds = self.downstreams.get(parts[0]) if parts else None
-        if parts is None or ds is None:
-            return _error_result(f"Unknown tool: {name}")
-        decision = await self.enforcer.check_call(ds.name, parts[1], arguments)
+        if parts is None:
+            ref = await self.enforcer.record_denial("*", name, "bad_name", "노출 이름 형식이 틀림")
+            return deny_result(ref)
+        server, tool = parts
+        ds = self.downstreams.get(server)
+        if ds is None:
+            ref = await self.enforcer.record_denial("*", name, "unknown_server", "설정에 없는 서버")
+            return deny_result(ref)
+        decision = await self.enforcer.check_call(ds.name, tool, arguments)
         if not decision.allowed:
-            if decision.reason.startswith("위험한 인자"):
-                return _error_result(f"Call blocked by Linkud gateway: dangerous argument ({name})")
-            return _error_result(f"Tool not permitted by Linkud gateway: {name}")
+            return deny_result(decision.ref or "")
         try:
-            result = await ds.call_tool(parts[1], arguments)
+            result = await ds.call_tool(tool, arguments)
         except DownstreamUnavailable:
-            return _error_result(f"Downstream unavailable for tool: {name}")
+            return await self._fail(server, tool, "unavailable", "다운스트림 연결 실패")
         except MCPError as exc:
-            return _error_result(f"Downstream error: {exc.message}")
+            # 다운스트림이 정한 오류 문자열은 에이전트에게 넘기지 않고 감사 로그에만 (길이 제한)
+            return await self._fail(
+                server,
+                tool,
+                "downstream_error",
+                f"다운스트림 MCP 오류 {exc.code}: {exc.message[:300]}",
+            )
         # 다운스트림 서버 정보 등 메타데이터는 에이전트에게 넘기지 않는다
         result = result.model_copy(update={"meta": None})
         if len(result.model_dump_json(by_alias=True)) > self.max_result_bytes:
             logger.warning("도구 결과 크기 상한 초과: %s", name)
-            return _error_result(f"Tool result too large: {name}")
+            return await self._fail(server, tool, "too_large", "도구 결과 크기 상한 초과")
         return result
+
+    async def _fail(self, server: str, tool: str, code: str, reason: str) -> types.CallToolResult:
+        ref = await self.enforcer.record_denial(server, tool, code, reason, kind="call_failed")
+        return deny_result(ref)
 
 
 def build_server(gateway: Gateway, name: str = "linkud-gateway") -> Server[Any]:
