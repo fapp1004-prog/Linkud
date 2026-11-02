@@ -60,3 +60,40 @@ async def test_sqlite_migrates_old_audit_table(tmp_path):
     await store.log(AuditEvent("call_denied", "s", "t", {}, ref="LK-ABCDEFGH"))
     assert (await store.find_by_ref("LK-ABCDEFGH")) is not None
     assert len(await store.audit_log()) == 2
+
+
+async def test_admin_audit_search_by_ref(monkeypatch):
+    import httpx
+
+    from linkud.config import parse_config
+    from linkud.proxy.gateway import create_app
+    from tests.helpers import FakeDownstream, TrustingVerifier, serve, tool
+
+    monkeypatch.setenv("LINKUD_AUTH_TOKENS", "agent")
+    monkeypatch.setenv("LINKUD_ADMIN_TOKENS", "admin")
+    app = create_app(
+        parse_config({}),
+        downstreams=[FakeDownstream("s", [tool("x")])],
+        store=MemoryStore(),
+        verifier=TrustingVerifier(),
+    )
+    gw = app.state.gateway
+    await gw.list_tools()
+    text = (await gw.call_tool("s__missing", {})).content[0].text
+    ref = text.rsplit(" ", 1)[-1]
+    admin = {"Authorization": "Bearer admin"}
+    async with serve(app) as url, httpx.AsyncClient() as http:
+        found = await http.get(f"{url}/admin/audit", params={"ref": ref}, headers=admin)
+        assert found.status_code == 200
+        [event] = found.json()
+        assert event["ref"] == ref and event["kind"] == "call_denied"
+        assert event["detail"]["code"] == "not_listed" and event["tool"] == "missing"
+
+        missing = await http.get(f"{url}/admin/audit", params={"ref": "LK-ZZZZZZZZ"}, headers=admin)
+        assert missing.status_code == 404
+        bad = await http.get(f"{url}/admin/audit", params={"ref": "x' OR 1=1"}, headers=admin)
+        assert bad.status_code == 400
+        agent = await http.get(
+            f"{url}/admin/audit", params={"ref": ref}, headers={"Authorization": "Bearer agent"}
+        )
+        assert agent.status_code == 401

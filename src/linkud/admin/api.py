@@ -6,6 +6,7 @@
     GET  /admin/verdicts                현재 정의 기준 판정 전체
     GET  /admin/servers                 서버 등급
     GET  /admin/audit?limit=100         감사 로그
+    GET  /admin/audit?ref=LK-XXXXXXXX   참조 번호로 거부 기록 찾기
     POST /admin/decisions               {"server", "tool", "tool_hash", "tier", "note"?}
     POST /admin/servers/{name}/release  재검증 상한으로 묶인 서버 해제
 """
@@ -20,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from linkud.enforcement.guard import Enforcer
+from linkud.enforcement.refs import REF_PATTERN
 from linkud.models import Tier, ToolVerdict
 from linkud.store.base import Store
 from linkud.verify.service import VerificationService
@@ -53,6 +55,14 @@ def admin_routes(service: VerificationService, enforcer: Enforcer, store: Store)
         return JSONResponse({s: (t.value if t else None) for s, t in tiers.items()})
 
     async def audit(request: Request) -> JSONResponse:
+        if (ref := request.query_params.get("ref")) is not None:
+            # 참조 번호로 거부 기록 하나를 찾는다 (형식이 틀리면 저장소에 묻지 않는다)
+            if not REF_PATTERN.fullmatch(ref):
+                return JSONResponse({"error": "ref 형식은 LK-XXXXXXXX"}, status_code=400)
+            event = await store.find_by_ref(ref)
+            if event is None:
+                return JSONResponse({"error": "해당 참조 번호 없음"}, status_code=404)
+            return JSONResponse([asdict(event)])
         try:
             limit = max(1, min(1000, int(request.query_params.get("limit", "100"))))
         except ValueError:
