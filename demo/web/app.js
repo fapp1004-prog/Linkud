@@ -4,7 +4,54 @@
 // 실시간 값이 오지 않으면 '연결 끊김'만 표시하고 가짜 값으로 채우지 않는다.
 "use strict";
 
-(() => {
+// 형광펜 범위: Linkud 규칙 검사의 발췌문은 앞뒤 문맥을 글자 수로 자른 것이라 단어 중간에서
+// 시작·끝날 수 있다. 시연 페이지에서만 그 범위를 문장 경계까지 넓힌다(규칙 엔진은 그대로).
+// 문장 끝 = 마침표·느낌표·물음표 뒤에 공백이나 글 끝이 오는 곳, 또는 줄바꿈.
+// 경로 안의 점(~/.ssh, a.txt)은 뒤에 공백이 없으므로 문장 끝으로 보지 않는다.
+// 잘못된 범위는 버리고, 넓힌 뒤 겹치는 범위는 합친다.
+function expandToSentences(text, spans) {
+  const n = text.length;
+  const ws = (c) => c === " " || c === "\t" || c === "\n" || c === "\r";
+  const endsSentence = (i) => {
+    const c = text[i];
+    if (c === "\n") return true;
+    return (c === "." || c === "!" || c === "?") && (i + 1 >= n || ws(text[i + 1]));
+  };
+  const out = [];
+  for (const span of Array.isArray(spans) ? spans : []) {
+    const s = Array.isArray(span) ? span[0] : undefined;
+    const e = Array.isArray(span) ? span[1] : undefined;
+    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || e > n || s >= e) continue;
+    let start = 0;
+    for (let i = s - 1; i >= 0; i--) {
+      if (endsSentence(i)) {
+        start = i + 1;
+        break;
+      }
+    }
+    while (start < s && ws(text[start])) start++;
+    let end = n;
+    for (let i = Math.max(s, e - 1); i < n; i++) {
+      if (endsSentence(i)) {
+        end = text[i] === "\n" ? i : i + 1;
+        break;
+      }
+    }
+    if (end > start) out.push([start, end]);
+  }
+  out.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const [s, e] of out) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else merged.push([s, e]);
+  }
+  return merged;
+}
+
+if (typeof module === "object" && module.exports) module.exports = { expandToSentences };
+
+if (typeof document !== "undefined") (() => {
   const $ = (id) => document.getElementById(id);
 
   // ---- DOM 도우미 (텍스트 노드만 사용) ----------------------------------------
@@ -136,7 +183,8 @@
   // ---- 장면 --------------------------------------------------------------------
   // 등급 값을 한국어로만 바꿔 보여 준다(값 자체는 감사 기록 그대로)
   const TIER_LABEL = { trusted: "신뢰", partial: "부분신뢰", untrusted: "불신", pending: "승인 대기" };
-  const FAKE_KEY = "-----BEGIN OPENSSH PRIVATE KEY----- AAAA-가짜-시연용-키-FAKE-DEMO-KEY …";
+  // 진짜 키 형식(머리말·base64)을 흉내 내지 않고 한눈에 가짜인 문자열을 쓴다
+  const FAKE_KEY = "[시연용 가짜 비밀키] ssh-key-DEMO-NOT-REAL…";
 
   const scenes = [
     {
@@ -204,13 +252,12 @@
         add(out, labelValue("서버 · 도구 이름", t.server + " · " + t.name));
         const box = el("div", "manual");
         const text = String(t.description || "");
-        const spans = (Array.isArray(t.highlights) ? t.highlights : [])
-          .map((h) => [Number(h.start), Number(h.end)])
-          .filter(([s, e]) => Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e <= text.length && s < e)
-          .sort((a, b) => a[0] - b[0]);
+        const spans = expandToSentences(
+          text,
+          (Array.isArray(t.highlights) ? t.highlights : []).map((h) => [Number(h.start), Number(h.end)])
+        );
         let pos = 0;
         for (const [s, e] of spans) {
-          if (s < pos) continue;
           box.appendChild(document.createTextNode(text.slice(pos, s)));
           add(box, el("mark", "hl", text.slice(s, e)));
           pos = e;
@@ -223,7 +270,7 @@
             "p",
             "live-text small",
             spans.length
-              ? "형광펜: Linkud 규칙 검사가 걸린 곳 (앞뒤 문맥 포함)"
+              ? "형광펜: Linkud 규칙 검사가 걸린 문장"
               : "규칙 검사에 걸린 곳 없음"
           )
         );

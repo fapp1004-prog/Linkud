@@ -41,6 +41,12 @@ async function gotoScene(page, n) {
   for (let i = 0; i < names.length; i++) {
     if (i > 0) await page.keyboard.press("ArrowRight");
     await page.waitForTimeout(3200); // 연출 채팅이 다 나오고 실시간 값이 올 때까지
+    if (i === 2) {
+      // 형광펜은 문장 경계까지: 단어 중간에서 시작하거나 끝나지 않는다
+      const marks = await page.locator(".manual mark").allTextContents();
+      const ok = marks.length > 0 && marks.every((m) => /^[A-Z가-힣]/.test(m) && /[.!?]$/.test(m));
+      check("장면 2 형광펜이 문장 단위", ok, marks.join(" | "));
+    }
     if (i === 3) {
       const ref = await page.locator(".kv-ref .kv-value").textContent({ timeout: 15000 });
       check("장면 3 참조 번호", /^LK-[0-9A-HJKMNP-TV-Z]{8}$/.test(ref || ""), ref);
