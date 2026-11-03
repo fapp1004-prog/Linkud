@@ -52,8 +52,32 @@ def test_ci_has_vulnerability_scans_and_sbom():
 DOCKERFILES = [
     ROOT / "deploy" / "Dockerfile",
     ROOT / "tests" / "fixtures" / "poisoned_servers" / "Dockerfile",
+    ROOT / "demo" / "servers" / "Dockerfile",
+    ROOT / "demo" / "driver" / "Dockerfile",
 ]
-COMPOSES = [ROOT / "deploy" / "docker-compose.yml"]
+COMPOSES = [ROOT / "deploy" / "docker-compose.yml", ROOT / "demo" / "docker-compose.yml"]
+
+
+def test_ci_runs_demo_smoke():
+    import yaml
+
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    job = ci["jobs"]["demo-smoke"]
+    assert job["needs"] == "test"
+    runs = " ".join(s.get("run", "") for s in job["steps"])
+    assert "docker compose -f demo/docker-compose.yml up -d --build" in runs
+    assert "demo/smoke.py" in runs
+    assert "down -v" in runs
+
+
+def test_dependabot_tracks_demo_images():
+    import yaml
+
+    cfg = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())
+    docker = next(u for u in cfg["updates"] if u["package-ecosystem"] == "docker")
+    assert {"/demo/servers", "/demo/driver"} <= set(docker["directories"])
+
+
 DIGEST = re.compile(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}")
 
 

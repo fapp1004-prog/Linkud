@@ -80,3 +80,28 @@ jobs:
       - name: 정리
         if: always()
         run: docker compose -f tests/fixtures/poisoned_servers/docker-compose.yml down -v
+
+  demo-smoke:
+    # 시연 환경(demo/)을 띄우고 장면 3의 참조 번호가 감사 로그에서 조회되는지 등 종단 간 확인
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.11.32"
+      - run: uv sync --frozen
+      - name: 시연 환경 기동 (AI 판사 꺼짐)
+        run: docker compose -f demo/docker-compose.yml up -d --build
+      - name: 시연 스모크 테스트
+        run: |
+          DEMO_ADMIN_TOKEN="$(docker compose -f demo/docker-compose.yml exec -T nginx cat /demo-secrets/admin.nginx)"
+          echo "::add-mask::$DEMO_ADMIN_TOKEN"
+          export DEMO_ADMIN_TOKEN
+          uv run python demo/smoke.py
+      - name: 실패 시 로그
+        if: failure()
+        run: docker compose -f demo/docker-compose.yml logs --tail 200
+      - name: 정리
+        if: always()
+        run: docker compose -f demo/docker-compose.yml down -v

@@ -16,7 +16,7 @@ updates:
       python-minor-patch:
         update-types: [minor, patch]
 
-  # 베이스 이미지 다이제스트 고정(deploy/Dockerfile, 테스트 서버 이미지)도 갱신 PR로 따라간다
+  # 베이스 이미지 다이제스트 고정(deploy/Dockerfile, 테스트 서버·시연 이미지)도 갱신 PR로 따라간다
   - package-ecosystem: docker
-    directories: [/deploy, /tests/fixtures/poisoned_servers]
+    directories: [/deploy, /tests/fixtures/poisoned_servers, /demo/servers, /demo/driver]
     schedule: {interval: weekly}
