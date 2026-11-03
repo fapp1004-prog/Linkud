@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linkud 시연: 같은 부탁, 다른 결과</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="title">
+      <span id="scene-no" class="scene-no"></span>
+      <h1 id="scene-title"></h1>
+    </div>
+    <nav class="nav" aria-label="장면 넘기기">
+      <button id="prev" type="button" aria-label="이전 장면">← 이전</button>
+      <ol id="dots" class="dots"></ol>
+      <button id="next" type="button" aria-label="다음 장면">다음 →</button>
+    </nav>
+  </header>
+
+  <main class="stage">
+    <section class="pane staged" aria-label="재현 화면">
+      <div class="pane-head">
+        <span class="badge badge-staged">재현 화면</span>
+        <span class="pane-note">AI 앱에 붙였을 때의 모습을 연출한 화면입니다</span>
+      </div>
+      <div id="staged" class="pane-body"></div>
+    </section>
+
+    <section class="pane live" aria-label="Linkud 패널 (실시간)">
+      <div class="pane-head">
+        <span class="badge badge-live">실시간</span>
+        <span class="pane-note">지금 실제로 돌아가는 Linkud</span>
+        <span id="conn" class="conn conn-wait">연결 확인 중</span>
+        <span id="judge" class="judge"></span>
+      </div>
+      <div id="live" class="pane-body"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>← → 키 또는 버튼으로 장면을 넘깁니다</span>
+  </footer>
+</body>
+</html>
