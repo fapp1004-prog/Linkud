@@ -23,3 +23,14 @@ def test_demo_readme_explains_judge_switch_and_checks():
 
 def test_root_readme_links_demo():
     assert "(demo/README.md)" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_rehearsal_checklist_runs_browser_check():
+    checklist = DOC.split("## 리허설 체크리스트", 1)[1].split("\n## ", 1)[0]
+    assert "node demo/browser_check.mjs" in checklist
+
+
+def test_egress_residual_risk_documented():
+    line = "키가 없을 때도 게이트웨이는 egress 네트워크에 붙어 있지만 실제로 나가는 요청은 없다"
+    assert line in DOC
+    assert line in (ROOT / "docs" / "threat-model.md").read_text(encoding="utf-8")
