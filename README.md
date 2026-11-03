@@ -12,6 +12,8 @@ AI 에이전트가 MCP 서버의 도구를 **연결하기 전에** 검증하고,
                      └ 변경 감지: 도구 정의 해시가 바뀌면 재검증 (러그풀 방어)
 ```
 
+**시연:** 비전공 청중용 브라우저 시연은 [`demo/`](demo/README.md) — `docker compose -f demo/docker-compose.yml up --build` 후 http://127.0.0.1:8080
+
 ## 왜 필요한가
 
 - 도구 포이즈닝은 **도구 설명(description)·스키마가 LLM 컨텍스트에 들어가는 순간** 성립한다. 모델 자체 안전장치로는 막기 어렵다(MCPTox: 평균 공격 성공률 36.5%, 최고 72.8%).
@@ -106,6 +108,7 @@ src/linkud/
 tests/          테스트 (fixtures/poisoned_servers: 오염 테스트 서버)
 eval/           탐지·지연 평가 스크립트
 deploy/         Dockerfile, compose, nginx, Actions
+demo/           발표용 시연 환경 (시연 MCP 서버, 드라이버, nginx, 페이지)
 docs/기획서.md   전체 기획 (설계 판단의 기준)
 docs/deny-response.md  거부 응답·참조 번호 설계
 docs/break-glass.md    브레이크 글래스(사용자 임시 허용) 설계·위협
