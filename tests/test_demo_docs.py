@@ -13,12 +13,25 @@ def test_demo_readme_has_run_and_rehearsal_sections():
         assert heading in DOC, heading
     for topic in ("인터넷", "미리 받아", "녹화"):
         assert topic in DOC, topic
-    assert "오른쪽은 지금 실제로 돌아가는 Linkud" in DOC
+    # 채팅 앱 하나로 단순화: 실제 값은 '실제 Linkud 응답' 표시가 붙은 메시지뿐
+    assert "'실제 Linkud 응답' 표시가 붙은 내용만 지금 실제로 돌아가는 Linkud" in DOC
+    assert "`N` 키" in DOC
+    for old in ("오른쪽은 지금", "오른쪽 (실시간)", "왼쪽 채팅", "노란 부분"):
+        assert old not in DOC, old
 
 
 def test_demo_readme_explains_judge_switch_and_checks():
     assert "ANTHROPIC_API_KEY" in DOC and "AI 판사 꺼짐(규칙만)" in DOC
     assert "demo/smoke.py" in DOC and "demo/browser_check.mjs" in DOC
+
+
+def test_readme_screenshots_exist():
+    import re
+
+    names = re.findall(r"screenshots/([\w.-]+\.png)", DOC)
+    assert names
+    for n in names:
+        assert (ROOT / "demo" / "screenshots" / n).exists(), n
 
 
 def test_root_readme_links_demo():
