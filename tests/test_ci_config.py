@@ -135,3 +135,31 @@ def test_syft_built_from_source_with_pinned_go():
     assert "go build" in text
     assert "COPY --from=syft" in text
     assert "SYFT_CHECK_FOR_APP_UPDATE=false" in text  # 실행 중 외부 업데이트 확인 끔
+
+
+PY_SLIM_DOCKERFILES = [
+    ROOT / "deploy" / "Dockerfile",
+    ROOT / "tests" / "fixtures" / "poisoned_servers" / "Dockerfile",
+    ROOT / "demo" / "servers" / "Dockerfile",
+    ROOT / "demo" / "driver" / "Dockerfile",
+]
+
+
+@pytest.mark.parametrize("path", PY_SLIM_DOCKERFILES, ids=lambda p: str(p.relative_to(ROOT)))
+def test_final_stage_upgrades_apt_for_cve_2026_109518(path):
+    # 최종(실행) 단계에서 apt·libapt-pkg7.0을 수정판(3.0.4 이상)으로 올리고, 못 올리면 빌드를 멈춘다
+    text = path.read_text()
+    final = text[text.rindex("\nFROM ") :]
+    assert final.lstrip().startswith("FROM python:3.12-slim@sha256:")
+    runs = [r for r in re.split(r"\n(?=[A-Z]+ )", final) if r.startswith("RUN ")]
+    upgrade = next((r for r in runs if "--only-upgrade" in r), None)
+    assert upgrade, "apt 업그레이드 RUN 없음"
+    for part in (
+        "apt-get update",
+        "apt libapt-pkg7.0",
+        "dpkg --compare-versions \"$(dpkg-query -W -f='${Version}' apt)\" ge 3.0.4",
+        "rm -rf /var/lib/apt/lists/*",  # 같은 RUN에서 목록 캐시 삭제
+    ):
+        assert part in upgrade, part
+    # 업그레이드는 root 단계에서, 그 뒤 비 root 사용자로 전환
+    assert final.index(upgrade) < final.index("\nUSER app")
