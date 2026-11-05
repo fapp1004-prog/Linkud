@@ -73,16 +73,48 @@ def test_fetches_only_relative_demo_paths():
 
 
 def test_real_vs_staged_badges_and_disconnect_notice():
-    assert "재현 화면" in ALL and "실시간" in ALL
+    # 채팅 앱 전체는 '재현 화면'(구석에 항상), 실제 값이 들어간 메시지는 '실제 Linkud 응답'
+    assert 'id="staged-badge"' in HTML and "재현 화면" in HTML
+    assert "실제 Linkud 응답" in JS
     assert "연결 끊김" in ALL
     assert "36.5%" in ALL and "MCPTox" in ALL  # 장면 1의 확률적 공격 주석
     assert "가짜" in ALL  # 장면 1의 키가 가짜임을 화면에 명시
     assert "AI 판사 꺼짐(규칙만)" in ALL
 
 
+def test_single_generic_chat_app_layout():
+    assert "<title>AI 비서를 지키는 문지기</title>" in HTML
+    assert "AI 비서" in HTML and "연결된 도구" in HTML
+    assert 'id="chat"' in HTML and 'id="composer"' in HTML
+    # 설명 패널(오른쪽 실시간 패널)과 화면 위 설명 글은 없다
+    for gone in ('id="live"', 'id="staged"', "Linkud 패널", 'id="scene-title"'):
+        assert gone not in ALL, gone
+    # 실제 제품의 이름·로고를 흉내 내지 않는다
+    for brand in ("Claude", "ChatGPT", "OpenAI", "Gemini", "Anthropic", "Copilot"):
+        assert brand not in ALL, brand
+    assert 'id="cover"' in HTML and 'id="finale"' in HTML
+
+
 def test_keyboard_and_buttons_change_scenes():
     assert "ArrowRight" in JS and "ArrowLeft" in JS
     assert 'id="next"' in HTML and 'id="prev"' in HTML
+
+
+def test_presenter_notes_toggle_with_n_and_hidden_by_default():
+    assert re.search(r'<aside id="notes"[^>]*\bhidden\b', HTML)
+    assert re.search(r"""key\s*===\s*["'][nN]["']""", JS)
+
+
+def test_single_hue_palette_defined_once():
+    # 색은 :root의 변수로만 정하고 나머지는 변수를 쓴다(한 가지 색의 명암 + 차분한 경고색 하나)
+    root = re.search(r":root\s*\{(.*?)\}", CSS, re.S).group(1)
+    rest = CSS.replace(root, "")
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(", rest)
+    assert "--warn" in root and "--accent" in root
+
+
+def test_short_fade_transitions():
+    assert re.search(r"transition:[^;]*opacity[^;]*0?\.\d+s", CSS)
 
 
 def test_live_values_are_not_hardcoded():
@@ -99,6 +131,7 @@ def test_live_values_are_not_hardcoded():
         (rug["hidden_after_change"], rug["total"]),
     ]:
         assert f"{pair[0]}/{pair[1]}" not in ALL and f"{pair[0]} / {pair[1]}" not in ALL
+        assert f"{pair[1]}개 중 {pair[0]}개" not in ALL
     assert not re.search(r"LK-[0-9A-HJKMNP-TV-Z]{8}", ALL)  # 참조 번호도 지어내지 않음
 
 
