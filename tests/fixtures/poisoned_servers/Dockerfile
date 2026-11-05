@@ -1,6 +1,13 @@
 # 오염 테스트 MCP 서버 이미지 (빌드 컨텍스트: 레포 루트)
 # 베이스 이미지는 다이제스트로 고정한다 (태그 python:3.12-slim, 2026-10-27 기준). Dependabot이 갱신 PR을 연다
 FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
+# CVE-2026-109518(apt·libapt-pkg7.0, HIGH): 베이스 이미지(2026-10-28 빌드)의 apt 3.0.3을 데비안 보안 저장소의
+# 수정판(3.0.4 이상)으로 올린다. 수정판을 못 받으면 빌드를 멈춘다(취약한 이미지가 조용히 나가지 않게).
+# apt 목록 캐시는 같은 RUN에서 지운다. 이 단계는 root로 돌고, 아래에서 비 root 사용자로 바꾼다
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg7.0 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 3.0.4 \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir "mcp>=2.2,<3" "uvicorn>=0.30" \
     && useradd --create-home --uid 10001 app
 WORKDIR /app
