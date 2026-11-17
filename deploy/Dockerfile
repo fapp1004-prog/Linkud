@@ -16,7 +16,7 @@ RUN uv sync --frozen --no-dev --no-editable
 # 배포 바이너리(최신 1.55.0 포함)가 Go 1.26.8로 빌드돼 stdlib CVE(crypto/x509·crypto/tls·net/http, HIGH)가
 # Trivy에 잡히는데 아직 고친 릴리스가 없다. Go 체크섬 DB(sumdb)가 모듈 무결성을 확인한다.
 # golang:1.27.3-bookworm (다이제스트 고정, 2026-10-27 기준)
-FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS syft
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS syft
 ARG SYFT_VERSION=1.55.0
 # syft 1.55.0이 끌어오는 go-jose v4.1.5에 CVE-2026-116587(HIGH, 수정판 4.1.6)이 있어 수정판으로 올린다.
 # 임시 모듈에서 syft와 고친 의존성을 함께 요구해 빌드한다(모듈 무결성은 go.sum·sumdb가 확인)
