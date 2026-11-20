@@ -1,0 +1,2 @@
+pyyaml   # policy.yaml 읽기 (A)
+httpx    # OSV 조회(C), LLM API 호출(B)

@@ -1,0 +1,30 @@
+# 약속 2 — 채점 규칙은 이 파일 하나에 모은다. (셋이 같이 관리, 바꾸면 단톡에 먼저 공유)
+#
+# 신뢰점수 = 100 - (각 검사기 risk × 중요도)의 합
+# 하드 룰은 점수 계산보다 먼저 본다.
+
+weights:            # 검사기별 중요도 (합치면 1)
+  injection: 0.6
+  supply_chain: 0.25
+  identity: 0.15
+
+thresholds:
+  allow: 80         # 80점 이상 → 허용
+  restrict: 50      # 50~79점 → 제한(사람 승인), 50점 미만 → 차단
+
+hard_rules:
+  # 검사기가 hard_block=True를 주면 점수와 상관없이 차단
+  #   - B: AI가 악성이라고 확신도 checkers.injection.confidence_block 이상
+  #   - C: 신분이 처음과 다름 (다시 검사할 때까지 차단)
+  block_if_hard_block: true
+  # 이 신호가 하나라도 있으면 점수가 높아도 최소 '제한'
+  #   - C: 심각한 취약점
+  restrict_if_signals:
+    - critical_vuln
+  # 검사기가 에러를 내거나 시간 초과 → '제한' (fail-closed: 절대 '허용'으로 떨어지지 않게)
+  on_checker_error: restrict
+
+checkers:
+  injection:
+    confidence_block: 0.8   # LLM 확신도가 이 값 이상이면 hard_block=True
+  timeout_seconds: 10       # 검사기 하나당 최대 시간

@@ -1,130 +1,54 @@
-# Linkud — MCP 도구 신뢰도 판정 게이트웨이
+# 링커드 MCP Trust Gateway
 
-AI 에이전트가 MCP 서버의 도구를 **연결하기 전에** 검증하고, 신뢰 등급에 따라 실행 권한을 자동으로 정하는 중계 게이트웨이.
+AI가 쓰는 도구(MCP 서버)를 **AI에게 보여주기 전에** 검사해서, 위험한 도구는 AI 눈에 안 보이게 막는 검문소 프로그램.
+링커슈 팀 AI:SHOOT 프로젝트 (7일 구현).
 
-> 링커스 20기 링커슈 팀 **링커드(Linkus guard)** 의 확정 주제
-> 「MCP 도구 설명 프롬프트 인젝션 탐지 기반 신뢰도-권한 자동 매핑 게이트웨이」의 개인 구현 (이정우)
+- 발표 이름: MCP 도구 설명 프롬프트 인젝션 탐지 기반 신뢰도-권한 자동 매핑 게이트웨이
+- 전체 설명·용어집·일정: 팀 통합본 문서 참고
 
-```
-에이전트 ──MCP──▶ [ Linkud 게이트웨이 ] ──MCP──▶ 다운스트림 MCP 서버들
-(Claude 등)          │ 등록 시점: 무거운 검증 (규칙 필터 → LLM 판별 → OSV 조회)
-                     │ 런타임:   해시 → 캐시된 등급만 조회 (LLM 호출 없음)
-                     └ 변경 감지: 도구 정의 해시가 바뀌면 재검증 (러그풀 방어)
-```
-
-**시연:** 비전공 청중용 브라우저 시연은 [`demo/`](demo/README.md) — `docker compose -f demo/docker-compose.yml up --build` 후 http://127.0.0.1:8080
-
-## 왜 필요한가
-
-- 도구 포이즈닝은 **도구 설명(description)·스키마가 LLM 컨텍스트에 들어가는 순간** 성립한다. 모델 자체 안전장치로는 막기 어렵다(MCPTox: 평균 공격 성공률 36.5%, 최고 72.8%).
-- MCP 스펙은 신뢰되지 않은 서버의 도구 정보를 untrusted로 다루라고만 하고, 실제 검증·접근통제는 구현자에게 맡긴다.
-- 기존 도구(MCPProxy, Snyk Agent Scan 등)는 스캔·피닝 같은 개별 기능 단위다. 이 프로젝트는 **탐지 → 등급 산출 → 권한 집행**을 하나의 파이프라인으로 묶는다.
-
-## 설계 원칙 (실무자 인터뷰 반영)
-
-| 원칙 | 근거 |
-|---|---|
-| 무거운 검증은 등록·변경 시점에, 런타임은 해시·캐시만 확인 | 유연호 교수님 인터뷰 Q7·Q8 |
-| 워크로드 신원만으로는 도구 설명·기능을 신뢰할 수 없음 → 도구 수준 검증 계층 | 인터뷰 Q6 |
-| LLM은 자연어(도구 설명) 판별에만, SBOM·CVE 조회는 규칙 기반 | 팀 Decision Log 4단계 |
-| 확실한 악성만 자동 차단, 애매하면 사람이 2차 판단 | 팀 4차 회의 |
-
-### 개인 구현에서 정할 것 (초안)
-
-- BLOCK 도구는 호출만 막지 않고 `tools/list`에서 제거 — 설명문이 컨텍스트에 들어가는 것 자체가 공격이므로
-- 다운스트림은 원격 HTTP MCP 서버만 허용 — 게이트웨이에서 검증 안 된 명령을 실행하지 않기 위해
-- 검증 실패 시 fail-closed
-- 등급 합산은 가중합 점수 대신 결정 테이블 — 판정 근거를 설명할 수 있도록
-
-## 로드맵 (`docs/기획서.md` 9장 단계 순서)
-
-- [x] **1. 투명 프록시** — 게이트웨이 하나로 여러 MCP 서버의 도구를 보고 호출
-- [x] **2. 해시·캐시·러그풀** — 도구 설명이 바뀌면 변경을 감지해 그 도구를 숨김 (바뀐 도구는 재승인 필요)
-- [x] **3. 규칙 필터·LLM 판별** — 오염된 설명에 대해 판정과 근거 출력
-- [x] **4. 결정 테이블·권한 매핑** — 서버별 등급, 부분신뢰 서버는 읽기 도구만 노출
-- [x] **5. 공급망 검증** — Registry → 패키지(해시 확인) → SBOM → OSV 결과를 등급에 반영
-- [x] **6. 테스트 서버·평가** — 기획서 8장 지표 표 (한 프로세스·별도 프로세스 측정)
-- [x] **7. 배포** — HTTPS·인증 게이트웨이, push 시 자동 배포, CI 취약점·SBOM·SHA/다이제스트 고정
-- [x] **8. 확장** — 관리 API·Slack 승인, 인자 검사, 재검증 상한, 감사 로그 보존,
-  거부 응답 고정 문구·참조 번호, 브레이크 글래스(사용자 임시 허용, 기본 꺼짐)
-- [ ] **다음** — LLM 판별기 실측(`--judge claude`), MCPTox 원문 대조·데이터 추가(라이선스 확인 후),
-  OSV 실조회 확인, 실제 EC2 배포(IMDSv2·SSM·OIDC 경로 검증), 감사 로그 외부 전송, OAuth
-
-## 평가 (기획서 8장)
-
-`uv run python eval/run_eval.py --multiproc` 로 다시 만들 수 있다. 전체 표와 방법은 [eval/results/RESULTS.md](eval/results/RESULTS.md).
-아래는 **LLM 판별기 없이(규칙 필터만)** 측정한 값이다. LLM·결정 테이블 열은 API 키를 넣고 `--judge claude`로 측정해야 한다.
-
-| 항목 | 결과 (규칙만) |
-| --- | --- |
-| 탐지율 / 미탐률 / 오탐률 | 83.3% / 16.7% / 3.7% (오염 30, 정상 54: MCP 공식 레퍼런스 서버 39 + 오탐 유도 문장 15) |
-| 러그풀 변경 감지 / 변경 후 숨김 | 100% / 100% (재승인 정책, 노출 전 목록 요청 1회 안에 숨김) |
-| 부분신뢰 서버에서 쓰기 도구 노출 | 0건 (LLM이 모두 '읽기'라고 속은 경우에도) |
-| 판별기 공격이 LLM을 완전히 속였을 때 '신뢰'가 되는 비율 | 2/6 |
-
-지연·처리량 (같은 머신, FakeJudge·공급망 제외, call_tool p50 · 동시 10 클라이언트 처리량):
-
-| 경로 | 한 프로세스 | 별도 프로세스 |
-| --- | --- | --- |
-| 게이트웨이 없음 | 3.4ms · 304/s | 3.3ms · 479/s |
-| 게이트웨이 캐시 히트 (MemoryStore) | 5.7ms · 145/s | 6.7ms · 274/s |
-| 게이트웨이 캐시 히트 (SqliteStore) | 8.7ms · 121/s | 9.2ms · 200/s |
-
-- "한 프로세스"는 서버·게이트웨이·부하 클라이언트가 이벤트 루프 하나를 나눠 써서 처리량이 낮게 나온다.
-  "별도 프로세스"(`eval/bench_multiproc.py`)가 실제 배포에 더 가깝다.
-- SqliteStore는 호출마다 감사 로그를 커밋해서 MemoryStore보다 call p50이 약 2.5ms 늘고 처리량이 약 27% 준다.
-- 규칙 필터가 놓친 5건은 키워드 없이 자연스러운 문장(subtle)과 일부 유출·인자 조작이다. 이 부분은 LLM 판별이 맡는다.
-- 오탐 2건(b03, b13)은 일부러 넣은 함정 문장이다. 평가 데이터에 맞춰 규칙을 고치지 않았다(과적합 방지).
-- 데이터는 작고 직접 만든 오염 샘플이므로 수치를 일반화하지 않는다. MCPTox 원본은 라이선스 확인 후 추가한다.
-- 오염 서버를 실제로 띄워 보려면 `tests/fixtures/poisoned_servers/`의 Docker 구성을 쓴다(호스트에서 직접 실행 금지).
-
-## 한계와 남은 위험
-
-자세한 분석은 [docs/threat-model.md](docs/threat-model.md)의 STRIDE 표.
-
-- **도구 응답 안의 인젝션은 잡지 않는다** (기획서 범위 밖). 설명은 그대로 두고 서버 동작만 바꾸는 공격도 마찬가지.
-- **거부 응답은 원인을 알려 주지 않는다.** 에이전트에게는 "[Linkud] 이 도구는 지금 사용할 수 없습니다. 관리자 문의 시
-  참조 번호: LK-XXXXXXXX"만 가고, 원인은 관리자가 `GET /admin/audit?ref=...`로 찾는다 ([docs/deny-response.md](docs/deny-response.md)).
-  응답 시간 차이로 정책 통과 여부를 짐작하는 것은 막지 못한다.
-- **브레이크 글래스(사용자 임시 허용, 기본 꺼짐).** 오탐으로 '승인 대기'에 걸린 도구를 사용자 본인이 사람 전용 토큰으로
-  `/override` 페이지에서 잠시(기본 8시간) 직접 허용할 수 있다. MCP 도구로는 노출하지 않고 에이전트가 쓰는 토큰으로는 받지 않는다.
-  허용 가능 여부가 1비트 정보를 준다는 점은 남은 위험이다 ([docs/break-glass.md](docs/break-glass.md)).
-- **LLM 판별 성능은 아직 측정하지 않았다.** 규칙에 없는 자연스러운 설득 문장은 LLM에 의존한다.
-- **판별 프롬프트의 "MCPTox 3요소"(트리거/악성 행위/은닉) 해석은 원문과 대조하지 못했다(미확인).**
-- 접속 토큰은 정적 Bearer 토큰이다(OAuth 미구현). 교체 절차는 [docs/deploy.md](docs/deploy.md) 4-1.
-- 감사 로그는 같은 호스트의 SQLite에 있어 호스트가 장악되면 변조될 수 있다(외부 전송 없음).
-- 재검증 상한(기본 10분 30회) 안에서는 LLM 비용이 발생한다.
-- OSV 실제 조회, OIDC 배포 워크플로(`deploy-oidc.yml`), 실제 EC2 배포는 검증하지 않았다.
-
-## 폴더 구조
+## 폴더 구조 (괄호 안이 담당자, 남의 폴더는 건드리지 않는다)
 
 ```
-src/linkud/
-  proxy/        투명 프록시: 에이전트용 서버면 + 다운스트림 클라이언트
-  enforcement/  목록 필터, 호출 가드 (런타임 경로: 캐시만 조회)
-  verify/       검증 경로 (해시, 규칙 필터, LLM 판별기, 공급망, 결정 테이블)
-  store/        Cache, Store 인터페이스와 구현
-  admin/        관리 API (확장)
-tests/          테스트 (fixtures/poisoned_servers: 오염 테스트 서버)
-eval/           탐지·지연 평가 스크립트
-deploy/         Dockerfile, compose, nginx, Actions
-demo/           발표용 시연 환경 (시연 MCP 서버, 드라이버, nginx, 페이지)
-docs/기획서.md   전체 기획 (설계 판단의 기준)
-docs/deny-response.md  거부 응답·참조 번호 설계
-docs/break-glass.md    브레이크 글래스(사용자 임시 허용) 설계·위협
+gateway/       proxy.py  cache.py  policy.py  audit.py  dashboard.py   (A)
+checkers/      base.py — 약속 1, 셋이 같이
+               injection.py  rules.py                                  (B)
+               supply_chain.py  identity.py                            (C)
+testservers/   calc_ok/  calc_poison/  rugpull/  vuln_dep/             (C)
+eval/          dataset/  run_eval.py                                   (B)
+policy.yaml    약속 2, 셋이 같이
+.env           API 키 (GitHub에 올리지 않음, .env.example 복사해서 만들기)
 ```
 
-## 개발
+## 시작하기
 
 ```bash
-uv sync
-uv run pytest
-uv run ruff check
+git clone https://github.com/fapp1004-prog/Linkud.git
+cd Linkud
+git checkout -b feat/proxy            # 내 갈래 (A: feat/proxy, B: feat/injection, C: feat/supply-chain)
+python -m venv .venv                  # 가상환경 (선택)
+pip install -r requirements.txt
+cp .env.example .env                  # 키는 .env에만
 ```
 
-## 참고
+매일: `main` 최신화 → 내 갈래에 merge → 작업 → push → PR → 다른 한 명이 훑어보고 Merge.
 
-- MCPTox: A Benchmark for Tool Poisoning Attack on Real-World MCP Servers (arXiv 2508.14925)
-- Invariant Labs, MCP Security Notification: Tool Poisoning Attacks (2025.04)
-- OWASP GenAI Security Project, Top 10 for Agentic Applications (ASI04), MCP Top 10 (MCP03)
-- MCP Specification 2026-07-28 — Tools
+## 꼭 지킬 것
+
+- API 키는 `.env`에만. 실수로 올렸으면 즉시 폐기하고 새로 발급.
+- `main`에 직접 올리지 않는다. 각자 갈래에서 PR.
+- 남의 폴더는 고치지 않는다. 고쳐야 하면 단톡에 먼저.
+- `checkers/base.py`, `policy.yaml`을 바꾸면 셋 다 영향받으니 단톡에 먼저.
+
+## D1 회의에서 정할 것
+
+1. **검사기 입력 모양** — 결과 모양(약속 1)은 정했지만 입력은 아직. 제안: `check(tool: dict, server_dir: str) -> CheckResult`
+2. **신호 이름 목록** — `ssh_key_access`, `critical_vuln`처럼 `signals`에 쓸 이름을 미리 맞춰둔다. `policy.yaml`의 `restrict_if_signals`가 이 이름을 본다.
+3. **하드 룰 표현** — 결과에 확신도 필드가 없어서, "AI 확신도 0.8 이상 → 차단"은 B가 `hard_block=True`로 넘기는 것으로 정리함 (`policy.yaml` 참고). 이대로 갈지 확인.
+4. **시연 장면 3개** — 완료 기준 참고: 포이즈닝 계산기 차단 / 러그풀 재검사 후 차단 / 취약 의존성 서버 제한→승인
+
+## 완료 기준
+
+- [ ] 포이즈닝 계산기 연결 → AI 앱 도구 목록에서 `add`가 사라지고 대시보드에 "차단 — ssh_key_access"
+- [ ] 러그풀 서버 → 처음엔 허용, 설명이 바뀌면 지문 불일치로 재검사 후 차단
+- [ ] 취약 의존성 서버 → "제한" 등급, 대시보드에서 승인해야 실행
+- [ ] 성적표 → 탐지율·오탐률 수치 확보
