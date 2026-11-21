@@ -35,6 +35,8 @@ class CheckResult(TypedDict):
     evidence: str       # 근거 (문제 문장, CVE 번호 등)
     latency_ms: int     # 검사에 걸린 시간
     confidence: NotRequired[float]  # B만: LLM이 악성이라고 판단한 확신도 0~1. 0.8 기준은 A가 policy.yaml로 적용
+    model: NotRequired[str]           # B만: 판정에 쓴 LLM 모델 이름 (캐시 키, SPEC 6·14장)
+    prompt_version: NotRequired[str]  # B만: 판별 프롬프트 버전. 프롬프트를 고치면 올린다
 
 
 # ── 검사기 함수 모양 ──────────────────────────────────
