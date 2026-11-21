@@ -171,6 +171,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve() -> None:
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     Handler.store = TrustStore()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"대시보드: http://{HOST}:{PORT}  (종료: Ctrl+C)", file=sys.stderr)

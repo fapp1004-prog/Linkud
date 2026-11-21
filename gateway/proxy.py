@@ -295,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         print("사용법: python -m gateway.proxy -- <서버 실행 명령>", file=sys.stderr)
         return 2
 
+    # Windows는 stderr 기본 인코딩이 cp949라서 '⚠' 같은 문자를 로그에 쓰면 게이트웨이가 죽을 수 있다
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=os.environ.get("LINKUD_LOG", "INFO"), stream=sys.stderr,
                         format="[gateway %(levelname)s] %(message)s")
     proto_in, proto_out = sys.stdin.buffer, sys.stdout.buffer
