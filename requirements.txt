@@ -1,2 +1,3 @@
 pyyaml   # policy.yaml 읽기 (A)
 httpx    # OSV 조회(C), LLM API 호출(B)
+python-dotenv  # .env에서 API 키 읽기 (B·C)

@@ -23,7 +23,31 @@ Claude Desktop ⇄ (stdio) ⇄ 게이트웨이(A) ⇄ (stdio) ⇄ 도구 서버(
 
 - 컨테이너 아님. Claude Desktop이 설정 파일에 적힌 명령으로 게이트웨이를 실행하고, 게이트웨이가 진짜 서버를 자식 프로세스로 실행한다.
 - Claude Desktop은 **등록된 서버마다 게이트웨이를 하나씩** 띄운다. 그래서 게이트웨이끼리는 SQLite 파일로만 공유한다.
-- mTLS·SPIFFE·서명·컨테이너 격리는 이번 주 범위 밖(12장 로드맵).
+- mTLS·SPIFFE·서명·컨테이너 격리는 이번 주 범위 밖(15장 로드맵).
+
+### 1-1. 기술 스택
+
+| 영역 | 쓰는 것 | 담당 | 비고 |
+|---|---|---|---|
+| 언어 | **Python 3.11 이상** | 전원 | |
+| 프록시·통신 | 표준 라이브러리 `subprocess` + `threading`(또는 `asyncio`), `json` | A | MCP 공식 SDK 없이 JSON-RPC를 줄 단위로 직접 읽고 씀. Windows에서 asyncio로 stdin 읽기가 까다로우면 스레드 방식 |
+| 해시 | `hashlib` (SHA-256) | A | 6장 정규화 규칙 |
+| 신뢰 캐시·승인 대기열 | **SQLite** (`sqlite3`, 내장) | A | 파일 하나를 모든 게이트웨이·대시보드가 공유 |
+| 감사 로그 | **JSONL** 파일 | A | `logs/audit.jsonl` |
+| 정책 설정 | **YAML** (`pyyaml`) | A | `policy.yaml` |
+| 대시보드 | `http.server` (내장) + HTML | A | 별도 프로그램, `127.0.0.1:8000`. 필요하면 Flask로 바꿀 수 있음(그때 requirements에 PR) |
+| 규칙 필터 | `re` (정규식, 내장) | B | |
+| LLM 판별 | **OpenAI API** (GPT, 링커스 지원 키) — `httpx`로 호출 | B | 모델·추론 강도는 B가 정하고 결정 기록에 남김. 키는 `.env`의 `OPENAI_API_KEY` |
+| 공급망 | lockfile 파싱(`json`, 텍스트) + **OSV API** `querybatch` — `httpx` | C | `https://api.osv.dev/v1/querybatch` |
+| 신원 고정 | `hashlib`로 서버 파일 지문 + initialize의 `serverInfo` | C | |
+| 테스트 서버 | 표준 라이브러리만 쓰는 stdio JSON-RPC 서버 (각 50줄 정도) | C | 러그풀처럼 응답을 마음대로 바꿔야 해서 SDK 없이 |
+| 비밀값 | `.env` + `python-dotenv` | 전원 | `.env`는 커밋 금지, `.env.example`만 올림 |
+| 평가 | 파이썬 스크립트 (`eval/run_eval.py`) | B | 탐지율·오탐률·검사 시간 |
+| AI 앱 (시연) | **Claude Desktop** | A·C | 설정 파일에 게이트웨이 실행 명령 등록 (12장) |
+| 디버깅·러그풀 시연 | **MCP Inspector** (`npx @modelcontextprotocol/inspector`) | 전원 | **Node.js 설치 필요** |
+| 협업 | Git·GitHub (갈래 → PR), 노션(회의록·일정) | 전원 | |
+
+추가 패키지는 `requirements.txt`에 있는 것만 쓴다. 새로 필요하면 PR로 추가하고 단톡에 알린다.
 
 ---
 
