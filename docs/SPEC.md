@@ -137,8 +137,8 @@ B의 규칙 필터가 "숨은 지시 + 민감 경로 + 은폐 요구"가 함께 
 
 **순서 (위에서부터 처음 걸리는 것으로 결정)**
 
-1. 검사기 하나라도 에러·시간 초과 → **제한** (근거에 에러 기록)
-2. `hard_block=True` 또는 B의 `confidence ≥ 0.8` → **차단**
+1. `hard_block=True` 또는 B의 `confidence ≥ 0.8` → **차단** (다른 검사기가 에러를 냈어도 차단이 우선)
+2. 검사기 하나라도 에러·시간 초과·약속 1과 다른 결과(목록에 없는 신호 포함) → **제한** (근거에 에러 기록)
 3. `critical_vuln` 또는 `identity_changed` 신호 → **최소 제한** (점수가 80 넘어도 제한)
 4. 점수: `신뢰점수 = 100 - Σ(risk × weight)` → 80↑ 허용 / 50~79 제한 / 50↓ 차단
 
@@ -246,6 +246,9 @@ B의 규칙 필터가 "숨은 지시 + 민감 경로 + 은폐 요구"가 함께 
 - **Python 3.11 이상**, 의존성은 `requirements.txt` (pyyaml, httpx)
 - 게이트웨이: `python -m gateway.proxy -- python testservers/calc_ok/server.py` (`--` 뒤가 진짜 서버 실행 명령)
 - 대시보드: `python -m gateway.dashboard`
+- **B·C 검사기가 아직 없을 때**: `checkers/<이름>.py`에 `check` 함수가 없으면 모든 도구가 '제한'이 된다(fail-closed). 그 전까지 A는 `LINKUD_DEV_CHECKERS=1`로 개발용 가짜 검사기(`gateway/devcheckers.py`, 근거에 `[DEV]` 표시)를 쓴다. 시연·평가에는 절대 쓰지 않는다.
+- 파일 위치: 신뢰 캐시 `data/trust.db`, 감사 로그 `logs/audit.jsonl` (둘 다 커밋 안 함, 레포 루트 기준)
+- A 테스트: `python -m unittest discover -s gateway/tests -t .`
 - Claude Desktop 설정 예시 (`claude_desktop_config.json`, Windows) — 경로·실행 방식은 **A가 D2에 실제로 확인 후 고침**:
 
 ```json
