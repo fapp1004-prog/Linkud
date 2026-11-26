@@ -9,8 +9,9 @@
   4) 신뢰점수 = 100 - Σ(risk × weight)  → 허용 / 제한 / 차단
 """
 
+import hashlib
 import importlib
-import os
+import json
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -42,6 +43,13 @@ def load_policy(path=None) -> dict:
     return p
 
 
+def policy_fp(policy: dict) -> str:
+    """적용한 정책 설정의 지문. 캐시 키에 들어가서, 정책이 바뀌면 이전 판정·승인을 쓰지 않는다 (SPEC 6장).
+    주석·공백·키 순서는 지문에 영향을 주지 않는다(파싱한 값 기준)."""
+    canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 # ── 검사기 불러오기 ───────────────────────────────────
 
 Checker = Callable[[dict, dict], dict]
@@ -59,7 +67,7 @@ def load_checkers(policy: dict) -> dict[str, Checker]:
     아직 구현 안 됐으면 호출할 때 에러를 내는 함수로 대신한다 → 판정은 '제한' (fail-closed).
     LINKUD_DEV_CHECKERS=1 이면 개발용 가짜 검사기를 쓴다 (gateway/devcheckers.py).
     """
-    if os.environ.get("LINKUD_DEV_CHECKERS") == "1":
+    if paths.mode() == "dev":
         from gateway import devcheckers
         print("[policy] ⚠ 개발용 가짜 검사기 사용 중 (LINKUD_DEV_CHECKERS=1)", file=sys.stderr)
         return {n: getattr(devcheckers, n) for n in policy["weights"]}
@@ -112,6 +120,31 @@ def validate_result(name: str, r) -> None:
         raise ValueError(f"{name}: 목록에 없는 신호 {unknown} (checkers/base.py SIGNALS에 먼저 추가)")
     if "confidence" in r and not (isinstance(r["confidence"], (int, float)) and 0 <= r["confidence"] <= 1):
         raise ValueError(f"{name}: confidence가 0~1 숫자가 아님")
+    for key in ("model", "prompt_version"):  # B가 판정에 쓴 모델·프롬프트 버전 (SPEC 3·14장)
+        if key in r and not (isinstance(r[key], str) and r[key]):
+            raise ValueError(f"{name}: '{key}'가 비어 있지 않은 문자열이 아님")
+
+
+# ── 서버 지문 (C의 checkers/fingerprint.py) ─────────────
+
+Fingerprint = Callable[[dict], str]
+
+
+def load_fingerprints() -> tuple[Fingerprint | None, Fingerprint | None]:
+    """C의 file_fp(server)·dep_fp(server)를 불러온다. (SPEC 6장, 결정 #29)
+    실제 모드에서 없으면 None → 지문 없음 → 판정을 재사용·승인하지 않는다.
+    개발 모드에서는 C가 아직 없을 때 개발용 가짜 지문을 쓴다."""
+    try:
+        mod = importlib.import_module("checkers.fingerprint")
+        f, d = getattr(mod, "file_fp", None), getattr(mod, "dep_fp", None)
+        if callable(f) and callable(d):
+            return f, d
+    except Exception:
+        pass
+    if paths.mode() == "dev":
+        from gateway import devcheckers
+        return devcheckers.file_fp, devcheckers.dep_fp
+    return None, None
 
 
 # ── 판정 ─────────────────────────────────────────────

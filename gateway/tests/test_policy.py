@@ -1,6 +1,8 @@
 import unittest
 
-from gateway.policy import decide, load_policy, validate_result
+import copy
+
+from gateway.policy import decide, load_policy, policy_fp, validate_result
 
 POLICY = load_policy()
 
@@ -77,6 +79,23 @@ class ValidateTest(unittest.TestCase):
     def test_bool_is_not_int(self):
         with self.assertRaises(ValueError):
             validate_result("injection", {**r("injection"), "risk": True})
+
+    def test_model_and_prompt_version_must_be_str(self):
+        validate_result("injection", {**r("injection"), "model": "gpt-x", "prompt_version": "v1"})
+        for k, bad in (("model", 5), ("prompt_version", None), ("model", "")):
+            with self.assertRaises(ValueError, msg=k):
+                validate_result("injection", {**r("injection"), k: bad})
+
+
+class PolicyFpTest(unittest.TestCase):
+    def test_same_values_same_fp(self):
+        reordered = dict(reversed(list(copy.deepcopy(POLICY).items())))
+        self.assertEqual(policy_fp(POLICY), policy_fp(reordered))
+
+    def test_value_change_changes_fp(self):
+        p = copy.deepcopy(POLICY)
+        p["thresholds"]["allow"] = 81
+        self.assertNotEqual(policy_fp(POLICY), policy_fp(p))
 
 
 if __name__ == "__main__":

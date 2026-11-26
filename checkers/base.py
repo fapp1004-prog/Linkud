@@ -18,10 +18,11 @@ class Tool(TypedDict):
 
 
 class ServerInfo(TypedDict):
-    """A가 검사기에 넘겨주는 서버 정보."""
+    """A가 검사기에 넘겨주는 서버 정보. (SPEC 3장, 결정 #26)"""
+    server_id: str      # 게이트웨이 실행 인자 --server-id. 캐시·승인·신원 장부의 키 (서버 자기 신고 이름 아님)
     name: str           # initialize 응답의 serverInfo.name (서버가 스스로 말한 값이라 믿을 수 없음)
     version: str        # initialize 응답의 serverInfo.version (마찬가지)
-    dir: str            # 서버 폴더 경로 (C가 lockfile·파일 지문을 읽을 때 사용)
+    dir: str | None     # 서버 폴더 절대경로. 못 찾으면 None → C 검사기는 raise (→ 제한)
     command: list[str]  # A가 서버를 실행한 명령. 예: ["python", "testservers/calc_ok/server.py"]
 
 
