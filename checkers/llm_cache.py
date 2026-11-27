@@ -49,6 +49,9 @@ class LLMCache:
                     usage TEXT NOT NULL DEFAULT '{}');
                 CREATE TABLE IF NOT EXISTS llm_leases (
                     lease_key TEXT PRIMARY KEY, owner TEXT, expires REAL);
+                CREATE TABLE IF NOT EXISTS b_batch_runs (
+                    run_key TEXT PRIMARY KEY, state TEXT NOT NULL,
+                    input_file_id TEXT, batch_id TEXT);
             ''')
 
     @contextmanager
@@ -107,3 +110,45 @@ class LLMCache:
         with self.connection() as db:
             rows = db.execute('SELECT status, COUNT(*) n, SUM(charged_micro_usd) amount FROM llm_calls GROUP BY status').fetchall()
         return {r['status']: {'calls': r['n'], 'usd': r['amount'] / 1_000_000} for r in rows}
+
+    def reserve_batch(self, run_key, reservations, model, mode, budget):
+        """온라인과 같은 예산 장부에 원자적 예약. 같은 평가를 두 번 제출하지 않는다."""
+        with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT 1 FROM b_batch_runs WHERE run_key=?', (run_key,)).fetchone():
+                raise ValueError('이미 제출을 시도한 Batch입니다. status/collect 또는 recover를 사용하세요.')
+            used = db.execute('SELECT COALESCE(SUM(charged_micro_usd),0) FROM llm_calls').fetchone()[0]
+            if used + sum(reservations.values()) > math.floor(budget * 1_000_000):
+                raise BudgetExceeded('Batch 예약액이 로컬 예산 한도를 넘습니다.')
+            db.execute('INSERT INTO b_batch_runs(run_key,state) VALUES(?,?)', (run_key, 'reserved'))
+            for custom_id, amount in reservations.items():
+                db.execute('INSERT INTO llm_calls(id,model,mode,created,status,charged_micro_usd) VALUES(?,?,?,?,?,?)',
+                           (run_key + ':' + custom_id, model, mode, time.time(), 'batch_reserved', amount))
+
+    def batch_run(self, run_key):
+        with self.connection() as db:
+            row = db.execute('SELECT * FROM b_batch_runs WHERE run_key=?', (run_key,)).fetchone()
+        return dict(row) if row else None
+
+    def update_batch(self, run_key, state, *, file_id=None, batch_id=None):
+        with self.connection() as db:
+            db.execute('UPDATE b_batch_runs SET state=?, input_file_id=COALESCE(?,input_file_id), '
+                       'batch_id=COALESCE(?,batch_id) WHERE run_key=?', (state, file_id, batch_id, run_key))
+
+    def import_batch(self, run_key, custom_id, key, payload_hash, prompt_fp, verdict, usage, charged):
+        """오류/누락은 예약액 유지. 같은 결과 재수집은 재과금·중복 기록하지 않는다."""
+        owner = run_key + ':' + custom_id
+        with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT status FROM llm_calls WHERE id=?', (owner,)).fetchone()
+            if not row:
+                raise ValueError('이 DB에 해당 Batch 예약이 없습니다.')
+            if row[0] == 'batch_complete':
+                return
+            if verdict is None:
+                db.execute('UPDATE llm_calls SET status=? WHERE id=?', ('batch_uncertain', owner))
+                return
+            db.execute('INSERT OR REPLACE INTO llm_results VALUES(?,?,?,?,?,?,?,?,?)',
+                       (*key, payload_hash, prompt_fp, json.dumps(verdict, ensure_ascii=False), json.dumps(usage), time.time()))
+            db.execute('UPDATE llm_calls SET status=?,charged_micro_usd=?,usage=? WHERE id=?',
+                       ('batch_complete', charged, json.dumps(usage), owner))

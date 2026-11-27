@@ -18,6 +18,23 @@ def rules_result(tool):
     return result
 
 
+def verdict_result(verdict, config, latency_ms=0):
+    """온라인/Batch 공통 변환. 위험도 변경은 팀 논의까지 기존 PR 값 유지."""
+    probability = float(verdict['attack_probability'])
+    risk = math.ceil(100 * probability) if probability >= 0.5 else 0
+    return {'checker': 'injection', 'risk': risk, 'hard_block': False,
+            'signals': ['llm_flagged'] if probability >= 0.5 else [],
+            'confidence': probability, 'model': config.model, 'prompt_version': b_prompt.PROMPT_VERSION,
+            'evidence': json.dumps(verdict, ensure_ascii=True), 'latency_ms': latency_ms}
+
+
+def request_cost(body, config, *, batch=False):
+    """예약액은 UTF-8 byte 기반 상한, usage 정산은 별도. 단위는 micro USD."""
+    bound = len(json.dumps(body, ensure_ascii=False).encode('utf-8')) + 2048
+    return math.ceil((bound * config.input_per_million + config.max_output_tokens * config.output_per_million)
+                     * (0.5 if batch else 1))
+
+
 def combine_results(rule_result, llm_result):
     """같은 평가 회차의 결과를 결합한다. 실패한 LLM 대신 과거 캐시를 가져오지 않는다."""
     if rule_result['hard_block']:
@@ -56,8 +73,7 @@ class Inspector:
         prompt_fp = b_prompt.fingerprint(c)
         body = b_prompt.request_body(payload, c)
         # 보수적인 UTF-8 byte 수 + 메시지 여유분. 정확한 과금은 API usage로 정산한다.
-        token_bound = len(json.dumps(body, ensure_ascii=False).encode('utf-8')) + 2048
-        reserve = math.ceil(token_bound * c.input_per_million + c.max_output_tokens * c.output_per_million)
+        reserve = request_cost(body, c)
         if not c.api_key and not cache_only:
             cache_only = True
         ticket = cache.acquire(key, payload_hash, prompt_fp, reserve, c.budget_usd,
@@ -80,13 +96,7 @@ class Inspector:
             except Exception:
                 cache.failed(ticket)
                 raise
-        probability = float(verdict['attack_probability'])
-        llm_risk = math.ceil(100 * probability) if probability >= 0.5 else 0
-        llm_result = {'checker': 'injection', 'risk': llm_risk, 'hard_block': False,
-                      'signals': ['llm_flagged'] if probability >= 0.5 else [],
-                      'confidence': probability, 'model': c.model, 'prompt_version': b_prompt.PROMPT_VERSION,
-                      'evidence': json.dumps(verdict, ensure_ascii=True),
-                      'latency_ms': int((time.monotonic() - started) * 1000)}
+        llm_result = verdict_result(verdict, c, int((time.monotonic() - started) * 1000))
         result = llm_result if method == 'llm' else combine_results(base, llm_result)
         result['latency_ms'] = int((time.monotonic() - started) * 1000)
         return result
