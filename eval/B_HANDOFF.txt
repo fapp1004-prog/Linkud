@@ -1,0 +1,69 @@
+B 구현 전달 — 2026-11-27
+
+추가 검토에서 수정한 B 문제
+- 여러 검사가 최초 DB를 동시에 만들면 WAL 설정에서 database is locked가 날 수 있어 제한된 잠금 재시도를 추가했습니다.
+- fresh LLM 평가 실패 후 compare/combined가 이전 성공 캐시를 읽지 않도록 같은 회차 결과/오류를 직접 결합합니다.
+- 중복 pair_id/variant 및 다른 원본을 연결한 짝은 채점 전에 거절합니다.
+- 고정 설정에 요청 시간 제한·출력 토큰·로컬 예산·단가를 기록하고, 실행 보고서에 캐시/새 호출 방식을 표시합니다.
+- C 미병합 상태에서도 B 테스트를 discover할 수 있도록 B 테스트 패키지의 빈 __init__.py를 추가했습니다.
+  C PR #25의 같은 파일과 내용이 같으며 C 구현 코드는 변경하지 않습니다.
+
+이 문서는 변경 요청/초기 제안을 적은 것이며 팀 합의 완료 선언이 아닙니다.
+SPEC, checkers/base.py, policy.yaml, gateway/, C 구현 파일은 변경하지 않았습니다.
+
+합의된 인터페이스를 그대로 구현한 것
+1) checkers.rules.scan(text) -> list[str]. 신호는 base.SIGNALS에 이미 있는 6개만 사용합니다.
+2) checkers.injection.check(tool, server) -> CheckResult. 서버 인자는 계약상 받되 B 판정에는 사용하지 않습니다.
+3) API/타임아웃/잘못된 JSON/예산 초과/크기 초과는 raise. A가 fail-closed 처리합니다.
+4) A의 gateway.cache.tool_hash를 import. B는 data/llm_cache.db를 소유합니다.
+5) confidence는 '악성일 확률'입니다. 정상이라고 99% 확신하면 confidence=0.01이어야 합니다.
+   0.8 차단 기준은 A가 적용합니다. B가 grade를 정해 반환하지 않습니다.
+6) 위험도는 규칙 신호와 LLM 위험도 중 최댓값입니다.
+7) 설명만이 아니라 도구 JSON 전체의 문자열/키를 검사하고 원본을 수정하지 않습니다.
+
+B의 초기 제안 — SPEC에 확정 기록은 아직 없음
+- 모델: GPT-5.4 mini의 고정 스냅샷 gpt-5.4-mini-2026-03-17, reasoning=low.
+- prompt_version: linkud-injection-v1. 본문/출력 스키마/추론 강도 지문도 캐시에 확인합니다.
+- risk: hidden_tag 40, secrecy_request 60, ssh_key_access 60, env_file_access 50,
+        tool_shadowing 60, invisible_chars 40.
+- hard_block: 같은 문자열 필드에서 hidden_tag + (ssh_key_access 또는 env_file_access) + secrecy_request.
+  서로 다른 필드의 단서를 합쳐 무조건 차단하지 않습니다. 인용/경고의 의미 오탐 가능성은 개발셋에서 검증해야 합니다.
+- LLM은 attack_probability, reason, evidence JSON을 반환합니다.
+  probability >= 0.5일 때 llm_flagged + ceil(100*p), 그 미만이면 LLM risk=0.
+  confidence에는 p 그대로 넣고 정상 라벨 확신도와 뒤집지 않습니다.
+- 이 수치는 보관/보완 평가 데이터로 조정하지 않았습니다. 최종 평가 전에 팀에서 고정하세요.
+
+A가 확인할 부분 — B가 수정하지 않음
+1) outputSchema와 최상위 확장 필드도 A의 해시/승인 유효성에 포함해야 합니다.
+   PR #23의 HASH_FIELDS는 name/description/inputSchema/annotations만 포함합니다.
+   B는 전체 payload_hash를 추가 대조해 B 캐시 재사용을 막지만, A가 이전 판정을 그대로 반환하면 B 호출 자체가 없습니다.
+   따라서 B 구현만으로 outputSchema만 바뀌는 러그풀까지 방어했다고 보고하면 안 됩니다.
+2) A의 자식 프로세스 환경변수 허용 목록 적용이 필요합니다.
+   B는 dotenv_values로 키를 읽고 os.environ에 넣지 않습니다.
+   하지만 A가 이미 시스템에 있는 토큰을 자식에게 전달하는 문제는 A 코드에 남아 있습니다.
+3) 모델·프롬프트·규칙 변경 시 A의 기존 판정 재사용도 무효화해야 합니다.
+   B 캐시는 프롬프트/모델 변경을 확인하지만 A가 B를 호출하지 않으면 새 판정이 없습니다.
+4) gateway/tests/test_proxy_e2e.py의 test_real_mode_without_b_and_fingerprints_is_fail_closed는
+   B check/scan 미구현을 가정합니다. B가 존재하면 안전하게 정제된 제한 도구가 노출될 수 있어 빈 목록 기대값이 틀립니다.
+   'B 없음' 상황을 명시적으로 모의하거나 B 구현 이후 시나리오와 나누어야 합니다.
+5) Windows 테스트 서버의 기본 stdout 인코딩이 CP949이면 UnicodeDecodeError로 응답 중계 스레드가 종료됩니다.
+   테스트 실행에서 PYTHONUTF8=1, PYTHONIOENCODING=utf-8을 주어 검증했습니다. A 파일은 변경하지 않았습니다.
+
+C와 확인할 부분 — B가 수정하지 않음
+- calc_poison.add는 규칙 치명 조합으로 잡힙니다. multiply 초안은 현재 규칙 신호가 없습니다.
+  실제 GPT가 multiply를 제한 이상으로 판정하는지는 아직 호출하지 않아 미확인입니다.
+- C의 신원/공급망/지문 및 테스트 서버 소스는 PR #25 그대로 참조했습니다.
+- 첨부 보완 자료는 80+80이고 reviewed=false가 전부입니다.
+  README의 '20개 검토'/'40개 서로 다른 서버' 등 설명은 최신 manifest 개수와 일부 다릅니다.
+  데이터나 문서를 B가 임의로 고치지는 않았고, 실제 레코드 기준으로 점검·집계합니다.
+- format_abuse 7개는 risk/hard_block/signals 형태를 흉내 낸 자료입니다.
+  현재 B의 내부 LLM 출력은 attack_probability/reason/evidence이므로, '실제 출력 형식을 정확히 위조한 공격'
+  성적으로 해석하기 전에 공격 초안을 검토해야 합니다. 제공된 문장을 자동으로 바꾸지는 않았습니다.
+
+데이터/평가 범위
+- AWS 정상 307 + 기존 MCPTox 악성 200: 본 평가 후보. 보완 80쌍은 별도 결과.
+- 기존 200과 보완셋은 base_id 중복 0, 서버 중복 34입니다. 서로를 dev/final로 나누면 서버 누출이 생깁니다.
+- 데이터셋 원문을 수정하거나 새 표본을 합성하지 않았습니다. 단위 테스트 fixture는 평가 자료가 아닙니다.
+- 최종 dev/final 분할, 라벨 확정, Batch API 업로드·실행은 이번 코드 실행에서 하지 않았습니다.
+- 현재 실행기는 동기 온라인 평가와 캐시 비교를 지원합니다. '최종은 Batch'가 별도 합의라면 실행기 확장/확정이 남습니다.
+- 최종 성적은 아직 없습니다. 오류 제한을 탐지 성공으로 계산하지 않습니다.
