@@ -2,8 +2,10 @@
 
 A는 캐시 키에, C(identity)는 신원 비교에 쓴다. (SPEC 6장, 결정안 ⑤)
 
-- file_fp(dir): 코드 + 의존성 파일 전체의 지문 → 서버 코드가 바뀌면 달라짐
-- dep_fp(dir):  의존성 파일만의 지문          → 라이브러리 목록이 바뀌면 달라짐
+- file_fp(server): 코드 + 의존성 파일 전체의 지문 → 서버 코드가 바뀌면 달라짐
+- dep_fp(server):  의존성 파일만의 지문          → 라이브러리 목록이 바뀌면 달라짐
+
+server 자리에는 A가 넘기는 ServerInfo dict(SPEC 3장, 'dir' 키 사용)와 폴더 경로(str·Path) 둘 다 받는다.
 
 규칙
 - 포함: 코드(*.py *.js *.ts *.mjs *.cjs) + 의존성 파일(requirements*.txt, pyproject.toml,
@@ -33,8 +35,14 @@ def _excluded(name: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in EXCLUDE_PATTERNS)
 
 
-def list_files(server_dir, deps_only: bool = False) -> list[str]:
+def _server_dir(server):
+    """ServerInfo dict면 'dir' 값을, 아니면 그대로(폴더 경로) 쓴다."""
+    return server.get("dir") if isinstance(server, dict) else server
+
+
+def list_files(server, deps_only: bool = False) -> list[str]:
     """지문에 들어가는 파일의 상대경로 목록 (정렬됨, '/' 구분)."""
+    server_dir = _server_dir(server)
     if not server_dir:
         raise ValueError("server dir가 비어 있음 (게이트웨이가 서버 폴더를 넘겨주지 않음)")
     root = Path(server_dir)
@@ -59,9 +67,11 @@ def _digest(root, rels: list[str]) -> str:
     return h.hexdigest()
 
 
-def file_fp(server_dir) -> str:
-    return _digest(server_dir, list_files(server_dir))
+def file_fp(server) -> str:
+    d = _server_dir(server)
+    return _digest(d, list_files(d))
 
 
-def dep_fp(server_dir) -> str:
-    return _digest(server_dir, list_files(server_dir, deps_only=True))
+def dep_fp(server) -> str:
+    d = _server_dir(server)
+    return _digest(d, list_files(d, deps_only=True))

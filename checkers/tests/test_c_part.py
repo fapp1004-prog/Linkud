@@ -77,6 +77,19 @@ class FingerprintTest(TmpDir):
     def test_missing_dir_raises(self):
         with self.assertRaises(ValueError):
             fingerprint.file_fp("")
+        with self.assertRaises(ValueError):          # A가 서버 폴더를 못 찾으면 dir=None (SPEC 3장)
+            fingerprint.file_fp({"server_id": "x", "dir": None})
+
+    def test_accepts_server_dict_and_path(self):
+        """A는 ServerInfo dict를, identity는 경로를 넘긴다 — 같은 지문이 나와야 신원 장부 비교가 맞는다."""
+        self.write("server.py", "print(1)")
+        self.write("requirements.txt", "x==1")
+        server = {"server_id": "calc-ok", "name": "calc-ok", "version": "1.0.0",
+                  "dir": str(self.dir), "command": ["python", "server.py"]}
+        self.assertEqual(fingerprint.file_fp(server), fingerprint.file_fp(str(self.dir)))
+        self.assertEqual(fingerprint.file_fp(server), fingerprint.file_fp(self.dir))
+        self.assertEqual(fingerprint.dep_fp(server), fingerprint.dep_fp(str(self.dir)))
+        self.assertEqual(len(fingerprint.file_fp(server)), 64)
 
 
 class RequirementsParseTest(unittest.TestCase):
