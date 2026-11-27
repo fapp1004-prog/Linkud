@@ -11,6 +11,7 @@ B의 LLM 결과는 B의 저장소(data/llm_cache.db)가 맡는다.
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -137,10 +138,17 @@ class TrustStore:
             c.execute("PRAGMA journal_mode=WAL")  # 여러 프로세스가 동시에 읽고 쓰기
             c.executescript(_SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """연결 하나를 열고, 끝나면 커밋(에러면 롤백)한 뒤 반드시 닫는다.
+        sqlite3의 `with conn:`은 커밋만 하고 닫지 않아서 연결이 쌓인다 (Windows에선 파일 잠금이 남을 수 있음)."""
         conn = sqlite3.connect(self.db_file, timeout=5)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     @staticmethod
     def _row(r: sqlite3.Row) -> Verdict:

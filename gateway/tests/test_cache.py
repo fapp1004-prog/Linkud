@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+from contextlib import closing
 import unittest
 from pathlib import Path
 
@@ -85,13 +86,13 @@ class StoreTest(unittest.TestCase):
         self.store.put(Verdict(key(tool_hash="h3", file_fp="new"), "c", "restrict", 70, signals=["known_vuln"]))
         self.store.put(Verdict(key(server_id="other", file_fp="new"), "x", "restrict", 85, signals=sig))
         self.store.put(Verdict(key(tool_hash="h5", file_fp="new", mode="real"), "r", "restrict", 85, signals=sig))
-        with sqlite3.connect(self.db) as c:  # C가 처음 기록해 둔 신원
+        with closing(sqlite3.connect(self.db)) as c, c:  # C가 처음 기록해 둔 신원
             c.execute("CREATE TABLE identity_baseline (server_id TEXT PRIMARY KEY, name TEXT, version TEXT, "
                       "file_fp TEXT, dep_fp TEXT, first_seen TEXT, updated_at TEXT)")
             c.execute("INSERT INTO identity_baseline VALUES ('s','calc','1.0','old','d','2026-11-20','2026-11-20')")
 
         self.assertTrue(self.store.approve(a, "dev")[0])
-        with sqlite3.connect(self.db) as c:
+        with closing(sqlite3.connect(self.db)) as c, c:
             row = c.execute("SELECT name, version, file_fp, dep_fp, first_seen FROM identity_baseline "
                             "WHERE server_id='s'").fetchone()
         self.assertEqual(row, ("calc", "2.0", "new", "d", "2026-11-20"))  # first_seen 유지
@@ -105,7 +106,7 @@ class StoreTest(unittest.TestCase):
     def test_identity_baseline_created_if_missing(self):
         a = self.store.put(Verdict(key(), "a", "restrict", 85, signals=["identity_changed"])).rowid
         self.assertTrue(self.store.approve(a, "dev")[0])
-        with sqlite3.connect(self.db) as c:
+        with closing(sqlite3.connect(self.db)) as c, c:
             self.assertEqual(c.execute("SELECT file_fp FROM identity_baseline").fetchone(), ("f",))
 
 

@@ -31,9 +31,10 @@ def gateway_env(tmp: str, dev=True, **extra) -> dict:
 
 
 class Session:
-    def __init__(self, tmp: str, server_id="fake-calc", dev=True, args=None, **extra):
+    def __init__(self, tmp: str, server_id="fake-calc", dev=True, args=None, server_cmd=None, **extra):
         args = ["--server-id", server_id] if args is None else args
-        self.p = subprocess.Popen([sys.executable, "-m", "gateway.proxy", *args, "--", sys.executable, str(FAKE)],
+        server_cmd = server_cmd or [sys.executable, str(FAKE)]
+        self.p = subprocess.Popen([sys.executable, "-m", "gateway.proxy", *args, "--", *server_cmd],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   cwd=tmp, env=gateway_env(tmp, dev, **extra))
         self.q: queue.Queue = queue.Queue()
@@ -275,9 +276,12 @@ class ProxyE2E(unittest.TestCase):
         self.assertEqual(sum(e["event"] == "verdict" for e in self.audit()), 8)  # 정책 지문이 달라 재판정
         self.assertEqual(len({v.key.policy_fp for v in self.store().all()}), 2)
 
-    def test_real_mode_without_bc_is_fail_closed(self):
-        """B·C가 아직 없으면: 전부 제한, 규칙 검사가 없어 정제 불가 → 아무것도 안 보이고, 지문이 없어 승인도 안 된다."""
-        s = Session(self.tmp.name, dev=False)
+    def test_real_mode_without_b_and_fingerprints_is_fail_closed(self):
+        """실제 모드에서 B(검사기·scan)가 없고 서버 지문도 못 구하면: 전부 제한, 정제 불가로 비노출,
+        판정 재사용 안 함, 승인 불가. 서버를 모듈(-m)로 실행해 폴더를 모르게 만들어서,
+        C의 지문 함수가 있든 없든 지문은 빈 값이 된다 (결정 #26·#29)."""
+        s = Session(self.tmp.name, dev=False,
+                    server_cmd=[sys.executable, "-m", "gateway.tests.fake_server"])
         try:
             s.start()
             self.assertEqual(s.tools(), {})
