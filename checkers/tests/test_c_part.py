@@ -136,9 +136,10 @@ class SupplyChainCheckTest(TmpDir):
         r = self.run_check()
         self.assertEqual((r["risk"], r["signals"]), (40, ["no_supply_info"]))
 
-    def test_declared_no_deps(self):
+    def test_comment_only_requirements_is_no_supply_info(self):  # SPEC 결정 #13
         self.write("requirements.txt", "# 표준 라이브러리만\n")
-        self.assertEqual(self.run_check()["risk"], 0)
+        r = self.run_check()
+        self.assertEqual((r["risk"], r["signals"]), (40, ["no_supply_info"]))
 
     def test_only_unpinned(self):
         self.write("requirements.txt", "flask>=2\n")
@@ -167,6 +168,63 @@ class SupplyChainCheckTest(TmpDir):
         r = self.run_check(batch={"results": [{"vulns": [{"id": "MAL-2025-1"}]}]})
         self.assertTrue(r["hard_block"])
         self.assertEqual(r["signals"], ["malicious_package"])
+
+    def test_unpinned_mixed_with_clean_pinned(self):  # 조회 못 한 줄을 안전으로 치지 않음
+        self.write("requirements.txt", "requests==2.32.0\nflask>=2\n--index-url https://pypi.org/simple\n")
+        r = self.run_check(batch={"results": [{}]})
+        self.assertEqual((r["risk"], r["signals"]), (40, ["no_supply_info"]))
+        self.assertIn("flask>=2", r["evidence"])
+        self.assertNotIn("index-url", r["evidence"])            # 설치 옵션은 의존성이 아님
+
+    def test_known_plus_unpinned_keeps_both_signals(self):
+        self.write("requirements.txt", "a==1\n-r other.txt\n")
+        r = self.run_check(batch={"results": [{"vulns": [{"id": "GHSA-m"}]}]},
+                           details={"GHSA-m": {"database_specific": {"severity": "MODERATE"}}})
+        self.assertEqual(r["risk"], 50)
+        self.assertEqual(r["signals"], ["known_vuln", "no_supply_info"])
+
+    def test_unchecked_severity_raises(self):  # 심각도를 모르면 known_vuln으로 낮춰 보지 않음 (fail-closed)
+        self.write("requirements.txt", "a==1\n")
+        def fake(url, body=None, timeout=5.0):
+            if body is not None:
+                return {"results": [{"vulns": [{"id": "GHSA-a"}, {"id": "GHSA-b"}]}]}
+            if url.endswith("GHSA-a"):
+                return {"database_specific": {"severity": "LOW"}}
+            raise OSError("timeout")
+        with mock.patch.object(supply_chain, "_http_json", side_effect=fake):
+            with self.assertRaises(TimeoutError):
+                supply_chain.check({}, {"dir": str(self.dir)})
+
+    def test_severe_found_even_if_others_unchecked(self):  # 이미 최소 제한이 확정이면 결과를 낸다
+        self.write("requirements.txt", "a==1\n")
+        def fake(url, body=None, timeout=5.0):
+            if body is not None:
+                return {"results": [{"vulns": [{"id": "GHSA-a"}, {"id": "GHSA-b"}]}]}
+            if url.endswith("GHSA-a"):
+                return {"database_specific": {"severity": "CRITICAL"}}
+            raise OSError("timeout")
+        with mock.patch.object(supply_chain, "_http_json", side_effect=fake):
+            r = supply_chain.check({}, {"dir": str(self.dir)})
+        self.assertEqual(r["signals"], ["critical_vuln"])
+        self.assertIn("심각도 미확인 1개", r["evidence"])
+
+    def test_follows_next_page_token(self):
+        self.write("requirements.txt", "big==1\n")
+        calls = []
+        def fake(url, body=None, timeout=5.0):
+            if body is not None:
+                calls.append(body)
+                q = body["queries"][0]
+                if "page_token" not in q:
+                    return {"results": [{"vulns": [{"id": "GHSA-1"}], "next_page_token": "t2"}]}
+                return {"results": [{"vulns": [{"id": "GHSA-2"}]}]}
+            sev = "HIGH" if url.endswith("GHSA-2") else "LOW"
+            return {"database_specific": {"severity": sev}}
+        with mock.patch.object(supply_chain, "_http_json", side_effect=fake):
+            r = supply_chain.check({}, {"dir": str(self.dir)})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["queries"][0]["page_token"], "t2")
+        self.assertEqual(r["signals"], ["critical_vuln"])        # 2페이지에 있던 심각 취약점까지 봄
 
     def test_osv_failure_raises(self):
         self.write("requirements.txt", "a==1\n")
@@ -268,9 +326,9 @@ class TestServersTest(unittest.TestCase):
         self.assertEqual(out[3]["error"]["code"], -32601)
 
     def test_demo_servers_supply_chain_without_network(self):
-        for folder in ("calc_ok", "calc_poison", "rugpull"):
+        for folder in ("calc_ok", "calc_poison", "rugpull"):   # 외부 의존성 없음 → no_supply_info 40 (단독으론 허용: 90점)
             r = supply_chain.check({}, {"dir": str(REPO / "testservers" / folder)})
-            self.assertEqual(r["risk"], 0, folder)
+            self.assertEqual((r["risk"], r["signals"]), (40, ["no_supply_info"]), folder)
         pinned, _, _ = supply_chain.parse_requirements(
             (REPO / "testservers" / "vuln_dep" / "requirements.txt").read_text(encoding="utf-8"))
         self.assertTrue(pinned)
