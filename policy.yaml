@@ -25,3 +25,7 @@ hard_rules:
 
 checkers:
   timeout_seconds: 10             # 검사기 하나당 최대 시간. 넘으면 에러로 취급
+
+churn:                            # 도구 정의를 자꾸 바꾸는 서버 (결정 #38, SPEC 6장)
+  max_changes_per_hour: 5         # 첫 목록 이후 '새 해시가 섞인 tools/list'가 이 횟수를 넘으면
+  window_seconds: 3600            # 새 해시는 검사기(LLM) 없이 제한·비노출. 시간이 지나면 다시 정상 검사

@@ -9,9 +9,12 @@
   4) 신뢰점수 = 100 - Σ(risk × weight)  → 허용 / 제한 / 차단
 """
 
+import hashlib
 import importlib
+import json
 import os
 import sys
+from pathlib import Path
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
@@ -42,6 +45,69 @@ def load_policy(path=None) -> dict:
     return p
 
 
+def policy_fp(policy: dict) -> str:
+    """적용한 정책 설정의 지문. 캐시 키에 들어가서, 정책이 바뀌면 이전 판정·승인을 쓰지 않는다 (SPEC 6장).
+    주석·공백·키 순서는 지문에 영향을 주지 않는다(파싱한 값 기준)."""
+    canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# 검사기 동작에 영향을 주는 LINKUD_* 설정 중, 파일 위치·로그처럼 판정과 무관한 것
+_FP_SKIP = {"LINKUD_DB", "LINKUD_DB_PATH", "LINKUD_AUDIT", "LINKUD_LOG", "LINKUD_POLICY",
+            # B의 예산·단가·저장 위치·대기 시간: 판정 결과와 무관. 바꿔도 승인이 풀리지 않게
+            # (모델·추론 강도·최대 출력 토큰은 판정에 영향 → 지문에 남김)
+            "LINKUD_B_BUDGET_USD", "LINKUD_B_INPUT_PRICE", "LINKUD_B_OUTPUT_PRICE",
+            "LINKUD_B_CACHE", "LINKUD_B_TIMEOUT"}
+
+
+def _dotenv_linkud(path: Path) -> dict[str, str]:
+    """.env에서 LINKUD_* 설정만 읽는다 (API 키 등 다른 값은 읽지도 않는다)."""
+    out: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if not line.startswith("LINKUD_") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+
+def checker_fp(root: Path | None = None, env=None, mode: str | None = None) -> str:
+    """검사기 버전 지문 (결정 #36). B·C의 규칙·위험도·프롬프트 코드나 모델 같은 LINKUD_* 설정이 바뀌면
+    값이 바뀌어, 예전 검사기로 낸 판정·승인을 재사용하지 않는다.
+    대상: checkers/ 아래 .py 소스(테스트 제외, 개발 모드면 gateway/devcheckers.py 포함) + LINKUD_* 설정(환경변수·.env)."""
+    root = Path(root or paths.REPO_ROOT)
+    env = os.environ if env is None else env
+    mode = mode or paths.mode()
+    h = hashlib.sha256(b"checker-fp-v1\0")
+    base = root / "checkers"
+    files = sorted(p for p in base.rglob("*.py") if "tests" not in p.relative_to(base).parts) if base.is_dir() else []
+    if mode == "dev":
+        files.append(root / "gateway" / "devcheckers.py")
+    for p in files:
+        try:
+            data = p.read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        h.update(p.relative_to(root).as_posix().encode() + b"\0" + data + b"\0")
+    settings = {**_dotenv_linkud(root / ".env"), **{k: v for k, v in env.items() if k.startswith("LINKUD_")}}
+    for k in sorted(settings):
+        if k not in _FP_SKIP:
+            h.update(f"{k}={settings[k]}\0".encode())
+    return h.hexdigest()
+
+
+def judge_fp(policy: dict, root: Path | None = None, env=None, mode: str | None = None) -> str:
+    """캐시 키의 '정책·검사기 지문' = 정책 지문 + 검사기 지문."""
+    return hashlib.sha256((policy_fp(policy) + ":" + checker_fp(root, env, mode)).encode()).hexdigest()
+
+
 # ── 검사기 불러오기 ───────────────────────────────────
 
 Checker = Callable[[dict, dict], dict]
@@ -59,7 +125,7 @@ def load_checkers(policy: dict) -> dict[str, Checker]:
     아직 구현 안 됐으면 호출할 때 에러를 내는 함수로 대신한다 → 판정은 '제한' (fail-closed).
     LINKUD_DEV_CHECKERS=1 이면 개발용 가짜 검사기를 쓴다 (gateway/devcheckers.py).
     """
-    if os.environ.get("LINKUD_DEV_CHECKERS") == "1":
+    if paths.mode() == "dev":
         from gateway import devcheckers
         print("[policy] ⚠ 개발용 가짜 검사기 사용 중 (LINKUD_DEV_CHECKERS=1)", file=sys.stderr)
         return {n: getattr(devcheckers, n) for n in policy["weights"]}
@@ -112,6 +178,31 @@ def validate_result(name: str, r) -> None:
         raise ValueError(f"{name}: 목록에 없는 신호 {unknown} (checkers/base.py SIGNALS에 먼저 추가)")
     if "confidence" in r and not (isinstance(r["confidence"], (int, float)) and 0 <= r["confidence"] <= 1):
         raise ValueError(f"{name}: confidence가 0~1 숫자가 아님")
+    for key in ("model", "prompt_version"):  # B가 판정에 쓴 모델·프롬프트 버전 (SPEC 3·14장)
+        if key in r and not (isinstance(r[key], str) and r[key]):
+            raise ValueError(f"{name}: '{key}'가 비어 있지 않은 문자열이 아님")
+
+
+# ── 서버 지문 (C의 checkers/fingerprint.py) ─────────────
+
+Fingerprint = Callable[[dict], str]
+
+
+def load_fingerprints() -> tuple[Fingerprint | None, Fingerprint | None]:
+    """C의 file_fp(server)·dep_fp(server)를 불러온다. (SPEC 6장, 결정 #29)
+    실제 모드에서 없으면 None → 지문 없음 → 판정을 재사용·승인하지 않는다.
+    개발 모드에서는 C가 아직 없을 때 개발용 가짜 지문을 쓴다."""
+    try:
+        mod = importlib.import_module("checkers.fingerprint")
+        f, d = getattr(mod, "file_fp", None), getattr(mod, "dep_fp", None)
+        if callable(f) and callable(d):
+            return f, d
+    except Exception:
+        pass
+    if paths.mode() == "dev":
+        from gateway import devcheckers
+        return devcheckers.file_fp, devcheckers.dep_fp
+    return None, None
 
 
 # ── 판정 ─────────────────────────────────────────────

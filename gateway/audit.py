@@ -23,8 +23,9 @@ def new_ref() -> str:
 
 
 def write(event: str, **fields) -> dict:
-    """감사 로그에 한 줄 쓴다. 쓰기에 실패해도 게이트웨이를 멈추지 않는다(stderr에 남김)."""
-    record = {"ts": datetime.now(KST).isoformat(timespec="seconds"), "event": event, **fields}
+    """감사 로그에 한 줄 쓴다. 쓰기에 실패해도 게이트웨이를 멈추지 않는다(stderr에 남김).
+    모든 기록에 실행 모드(dev/real)를 붙인다 (SPEC 9·12장)."""
+    record = {"ts": datetime.now(KST).isoformat(timespec="seconds"), "event": event, "mode": paths.mode(), **fields}
     line = json.dumps(record, ensure_ascii=False, default=str)
     path: Path = paths.audit_path()
     try:

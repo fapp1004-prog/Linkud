@@ -1,6 +1,11 @@
 import unittest
 
-from gateway.policy import decide, load_policy, validate_result
+import copy
+
+import tempfile
+from pathlib import Path
+
+from gateway.policy import checker_fp, decide, judge_fp, load_policy, policy_fp, validate_result
 
 POLICY = load_policy()
 
@@ -77,6 +82,75 @@ class ValidateTest(unittest.TestCase):
     def test_bool_is_not_int(self):
         with self.assertRaises(ValueError):
             validate_result("injection", {**r("injection"), "risk": True})
+
+    def test_model_and_prompt_version_must_be_str(self):
+        validate_result("injection", {**r("injection"), "model": "gpt-x", "prompt_version": "v1"})
+        for k, bad in (("model", 5), ("prompt_version", None), ("model", "")):
+            with self.assertRaises(ValueError, msg=k):
+                validate_result("injection", {**r("injection"), k: bad})
+
+
+class PolicyFpTest(unittest.TestCase):
+    def test_same_values_same_fp(self):
+        reordered = dict(reversed(list(copy.deepcopy(POLICY).items())))
+        self.assertEqual(policy_fp(POLICY), policy_fp(reordered))
+
+    def test_value_change_changes_fp(self):
+        p = copy.deepcopy(POLICY)
+        p["thresholds"]["allow"] = 81
+        self.assertNotEqual(policy_fp(POLICY), policy_fp(p))
+
+
+class CheckerFpTest(unittest.TestCase):
+    """검사기 지문 (결정 #36): B·C 코드나 모델 설정이 바뀌면 판정을 재사용하지 않는다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "checkers" / "tests").mkdir(parents=True)
+        (self.root / "checkers" / "rules.py").write_text("RISK = {'hidden_tag': 40}\n", encoding="utf-8")
+        (self.root / "checkers" / "tests" / "test_x.py").write_text("x = 1\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fp(self, env=None):
+        return checker_fp(self.root, env or {}, "real")
+
+    def test_checker_code_change(self):
+        before = self.fp()
+        (self.root / "checkers" / "rules.py").write_text("RISK = {'hidden_tag': 50}\n", encoding="utf-8")
+        self.assertNotEqual(before, self.fp())
+
+    def test_tests_ignored(self):
+        before = self.fp()
+        (self.root / "checkers" / "tests" / "test_x.py").write_text("x = 2\n", encoding="utf-8")
+        self.assertEqual(before, self.fp())
+
+    def test_model_setting_counts_but_paths_do_not(self):
+        base = self.fp()
+        self.assertNotEqual(base, self.fp({"LINKUD_B_MODEL": "other"}))
+        self.assertEqual(base, self.fp({"LINKUD_DB": "/x.db", "LINKUD_AUDIT": "/a", "LINKUD_LOG": "DEBUG"}))
+        self.assertEqual(base, self.fp({"OPENAI_API_KEY": "sk-x", "PATH": "/bin"}))
+
+    def test_budget_settings_do_not_count(self):
+        """B의 예산·단가·저장 위치·대기 시간은 판정과 무관 → 바꿔도 승인이 풀리지 않는다."""
+        base = self.fp()
+        self.assertEqual(base, self.fp({"LINKUD_B_BUDGET_USD": "10", "LINKUD_B_INPUT_PRICE": "1",
+                                        "LINKUD_B_OUTPUT_PRICE": "5", "LINKUD_B_CACHE": "/c.db",
+                                        "LINKUD_B_TIMEOUT": "20"}))
+        for k in ("LINKUD_B_MODEL", "LINKUD_B_EFFORT", "LINKUD_B_MAX_OUTPUT_TOKENS"):  # 판정에 영향 → 남김
+            self.assertNotEqual(base, self.fp({k: "x"}), k)
+
+    def test_dotenv_linkud_only(self):
+        base = self.fp()
+        (self.root / ".env").write_text("OPENAI_API_KEY=sk-secret\n", encoding="utf-8")
+        self.assertEqual(base, self.fp())  # 키는 지문에 안 들어감
+        (self.root / ".env").write_text("OPENAI_API_KEY=sk-secret\nLINKUD_B_MODEL=m2\n", encoding="utf-8")
+        self.assertNotEqual(base, self.fp())
+
+    def test_judge_fp_combines(self):
+        self.assertNotEqual(judge_fp(POLICY, self.root, {}, "real"), judge_fp(POLICY, self.root, {"LINKUD_B_MODEL": "x"}, "real"))
 
 
 if __name__ == "__main__":

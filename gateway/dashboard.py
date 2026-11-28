@@ -18,7 +18,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from gateway import audit
+from gateway import audit, paths
 from gateway.cache import TrustStore, Verdict
 
 HOST = "127.0.0.1"
@@ -48,6 +48,7 @@ border:1px solid var(--ok);background:var(--ok);color:#fff}
 form.search{display:flex;gap:8px;margin-bottom:12px}input{font:inherit;padding:5px 8px;border-radius:6px;
 border:1px solid var(--line);background:var(--card);color:var(--text);width:220px}
 .empty{padding:16px;color:var(--muted)}.score{font-variant-numeric:tabular-nums}
+.banner{padding:10px 14px;border-radius:8px;margin:0 0 16px;font-weight:600}
 """
 
 
@@ -60,6 +61,16 @@ def pill(state: str) -> str:
     return f'<span class="pill {cls}">{esc(label)}</span>'
 
 
+def why_not_approvable(v: Verdict) -> str:
+    if v.grade != "restrict":
+        return "제한 등급 아님"
+    if not v.exposable:
+        return "정제 불가 → 승인 불가"
+    if not v.key.complete:
+        return "서버 지문 없음 → 승인 불가"
+    return ""
+
+
 def verdict_rows(vs: list[Verdict], with_button: bool) -> str:
     if not vs:
         return '<div class="empty">없음</div>'
@@ -67,16 +78,19 @@ def verdict_rows(vs: list[Verdict], with_button: bool) -> str:
     for v in vs:
         btn = ""
         if with_button:
-            btn = (f'<form method="post" action="/approve"><input type="hidden" name="server" value="{esc(v.server)}">'
-                   f'<input type="hidden" name="hash" value="{esc(v.hash)}"><button>승인</button></form>')
+            why = why_not_approvable(v)
+            btn = (f'<span class="muted">{esc(why)}</span>' if why else
+                   f'<form method="post" action="/approve"><input type="hidden" name="rowid" value="{v.rowid}">'
+                   f'<button>승인</button></form>')
         reasons = "".join(f"<li>{esc(r)}</li>" for r in v.reasons)
         signals = ", ".join(f"<code>{esc(s)}</code>" for s in v.signals) or '<span class="muted">-</span>'
+        name = f" <span class='muted'>({esc(v.server_name)})</span>" if v.server_name else ""
         rows.append(
             f"<tr><td>{pill(v.effective)}</td><td class='score'>{v.score}</td>"
-            f"<td>{esc(v.server)}</td><td><b>{esc(v.tool)}</b><br><code class='muted'>{esc(v.hash[:12])}</code></td>"
+            f"<td>{esc(v.server)}{name}</td><td><b>{esc(v.tool)}</b><br><code class='muted'>{esc(v.hash[:12])}</code></td>"
             f"<td>{signals}</td><td><ul>{reasons}</ul></td><td class='muted'>{esc(v.created_at)}</td>"
             + (f"<td>{btn}</td>" if with_button else "") + "</tr>")
-    head = ("<tr><th>상태</th><th>점수</th><th>서버</th><th>도구</th><th>신호</th><th>근거</th><th>판정 시각</th>"
+    head = ("<tr><th>상태</th><th>점수</th><th>서버 ID</th><th>도구</th><th>신호</th><th>근거</th><th>판정 시각</th>"
             + ("<th></th>" if with_button else "") + "</tr>")
     return f"<div class='card'><table>{head}{''.join(rows)}</table></div>"
 
@@ -89,34 +103,44 @@ def audit_rows(recs: list[dict]) -> str:
         detail = r.get("ref") or r.get("error") or (f"{r.get('score')}점" if "score" in r else "")
         state = r.get("grade", "")
         rows.append(f"<tr><td class='muted'>{esc(r.get('ts', ''))}</td><td><code>{esc(r.get('event', ''))}</code></td>"
-                    f"<td>{esc(r.get('server', ''))}</td><td>{esc(r.get('tool', ''))}</td>"
+                    f"<td>{esc(r.get('server_id', ''))}</td><td>{esc(r.get('tool', ''))}</td>"
                     f"<td>{pill(state) if state else ''}</td><td><code>{esc(detail)}</code></td></tr>")
-    return ("<div class='card'><table><tr><th>시각</th><th>이벤트</th><th>서버</th><th>도구</th><th>등급</th>"
+    return ("<div class='card'><table><tr><th>시각</th><th>이벤트</th><th>서버 ID</th><th>도구</th><th>등급</th>"
             f"<th>참조번호·비고</th></tr>{''.join(rows)}</table></div>")
 
 
+def mode_banner() -> str:
+    """지금 보고 있는 DB가 어느 모드인지 항상 위에 띄운다 (SPEC 8·12장)."""
+    if paths.mode() == "dev":
+        return ("<p class='banner bad'>⚠ 개발 모드 (가짜 검사기) — 이 화면의 판정은 시연·평가에 쓰지 않습니다 · "
+                f"DB <code>{esc(paths.db_path())}</code></p>")
+    return f"<p class='banner ok'>실제 모드 · DB <code>{esc(paths.db_path())}</code></p>"
+
+
 def render(store: TrustStore, ref: str = "", notice: str = "") -> str:
-    all_v = store.all()
+    mode = paths.mode()
+    all_v = store.all(mode)  # 현재 모드의 판정만 (다른 모드 판정은 보이지도, 승인되지도 않는다)
     pending = [v for v in all_v if v.grade == "restrict" and not v.approved]
     ref_html = ""
     if ref:
-        found = audit.find_ref(ref)
+        found = [r for r in audit.find_ref(ref) if r.get("mode") == mode]
         extra = ""
         for rec in found:
-            v = store.get(rec.get("server", ""), rec.get("hash") or "")
-            if v:
+            v = store.by_rowid(rec["rowid"]) if isinstance(rec.get("rowid"), int) else None
+            if v and v.key.mode == mode:
                 extra = "<h2>그 도구의 판정</h2>" + verdict_rows([v], False)
         ref_html = f"<h2>참조번호 {esc(ref)} 조회</h2>" + audit_rows(found) + extra
     note = f"<p class='pill ok'>{esc(notice)}</p>" if notice else ""
+    recent = [r for r in audit.read_recent(200) if r.get("mode") == mode][:50]
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5">
 <title>링커드 게이트웨이 대시보드</title><style>{CSS}</style></head><body><main>
-<h1>링커드 게이트웨이 대시보드</h1><p class="sub">5초마다 새로고침 · 도구 {len(all_v)}개 판정 · 승인 대기 {len(pending)}개</p>{note}
+<h1>링커드 게이트웨이 대시보드</h1>{mode_banner()}<p class="sub">5초마다 새로고침 · 도구 {len(all_v)}개 판정 · 승인 대기 {len(pending)}개</p>{note}
 <form class="search" method="get" action="/"><input name="ref" placeholder="참조번호 (LK-...)" value="{esc(ref)}"><button>조회</button></form>
 {ref_html}
 <h2>승인 대기</h2>{verdict_rows(pending, True)}
 <h2>전체 판정</h2>{verdict_rows(all_v, False)}
-<h2>최근 기록</h2>{audit_rows(audit.read_recent(50))}
+<h2>최근 기록</h2>{audit_rows(recent)}
 </main></body></html>"""
 
 
@@ -160,12 +184,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, "다른 출처에서 온 승인 요청은 받지 않습니다.", "text/plain; charset=utf-8")
         length = min(int(self.headers.get("Content-Length", "0") or 0), 10_000)
         form = parse_qs(self.rfile.read(length).decode("utf-8"))
-        server, h = form.get("server", [""])[0], form.get("hash", [""])[0]
-        ok = self.store.approve(server, h)
-        v = self.store.get(server, h)
+        raw = form.get("rowid", [""])[0]
+        if not raw.isdigit():
+            return self._send(400, "rowid가 필요합니다.", "text/plain; charset=utf-8")
+        rowid = int(raw)
+        ok, msg = self.store.approve(rowid, paths.mode())
         if ok:
-            audit.write("approved", server=server, tool=v.tool if v else "", hash=h, grade="approved")
-        msg = "승인했습니다" if ok else "승인할 수 없습니다 (제한 등급만 승인 가능)"
+            v = self.store.by_rowid(rowid)
+            audit.write("approved", server_id=v.server, tool=v.tool, hash=v.hash, rowid=rowid, grade="approved",
+                        signals=v.signals)
         from urllib.parse import quote
         self._send(303, "", headers={"Location": "/?msg=" + quote(msg)})
 
