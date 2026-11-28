@@ -1,0 +1,5 @@
+# 평가 원문과 정답은 로컬/팀 드라이브에 보관한다.
+*
+!.gitignore
+!.gitkeep
+!FINAL_HASH.txt
