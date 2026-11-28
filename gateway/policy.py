@@ -12,7 +12,9 @@
 import hashlib
 import importlib
 import json
+import os
 import sys
+from pathlib import Path
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
@@ -48,6 +50,58 @@ def policy_fp(policy: dict) -> str:
     주석·공백·키 순서는 지문에 영향을 주지 않는다(파싱한 값 기준)."""
     canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# 검사기 동작에 영향을 주는 LINKUD_* 설정 중, 파일 위치·로그처럼 판정과 무관한 것
+_FP_SKIP = {"LINKUD_DB", "LINKUD_DB_PATH", "LINKUD_AUDIT", "LINKUD_LOG", "LINKUD_POLICY"}
+
+
+def _dotenv_linkud(path: Path) -> dict[str, str]:
+    """.env에서 LINKUD_* 설정만 읽는다 (API 키 등 다른 값은 읽지도 않는다)."""
+    out: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if not line.startswith("LINKUD_") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+
+def checker_fp(root: Path | None = None, env=None, mode: str | None = None) -> str:
+    """검사기 버전 지문 (결정 #36). B·C의 규칙·위험도·프롬프트 코드나 모델 같은 LINKUD_* 설정이 바뀌면
+    값이 바뀌어, 예전 검사기로 낸 판정·승인을 재사용하지 않는다.
+    대상: checkers/ 아래 .py 소스(테스트 제외, 개발 모드면 gateway/devcheckers.py 포함) + LINKUD_* 설정(환경변수·.env)."""
+    root = Path(root or paths.REPO_ROOT)
+    env = os.environ if env is None else env
+    mode = mode or paths.mode()
+    h = hashlib.sha256(b"checker-fp-v1\0")
+    base = root / "checkers"
+    files = sorted(p for p in base.rglob("*.py") if "tests" not in p.relative_to(base).parts) if base.is_dir() else []
+    if mode == "dev":
+        files.append(root / "gateway" / "devcheckers.py")
+    for p in files:
+        try:
+            data = p.read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        h.update(p.relative_to(root).as_posix().encode() + b"\0" + data + b"\0")
+    settings = {**_dotenv_linkud(root / ".env"), **{k: v for k, v in env.items() if k.startswith("LINKUD_")}}
+    for k in sorted(settings):
+        if k not in _FP_SKIP:
+            h.update(f"{k}={settings[k]}\0".encode())
+    return h.hexdigest()
+
+
+def judge_fp(policy: dict, root: Path | None = None, env=None, mode: str | None = None) -> str:
+    """캐시 키의 '정책·검사기 지문' = 정책 지문 + 검사기 지문."""
+    return hashlib.sha256((policy_fp(policy) + ":" + checker_fp(root, env, mode)).encode()).hexdigest()
 
 
 # ── 검사기 불러오기 ───────────────────────────────────

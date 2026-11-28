@@ -4,7 +4,7 @@
 B의 LLM 결과는 B의 저장소(data/llm_cache.db)가 맡는다.
 게이트웨이 여러 개와 대시보드가 같은 DB 파일을 같이 쓴다.
 
-캐시 키 = (server_id, 도구 해시, 서버 파일 지문, 의존성 지문, 정책 지문, 실행 모드)
+캐시 키 = (server_id, 도구 해시, 서버 파일 지문, 의존성 지문, 정책·검사기 지문, 실행 모드)
 → 하나라도 다르면 다른 판정이다. 그래서 서버 코드·의존성·정책·모드가 바뀌면 이전 판정과 승인은 쓰이지 않는다.
 """
 
@@ -19,15 +19,14 @@ from pathlib import Path
 from gateway import paths
 from gateway.audit import KST
 
-HASH_FIELDS = ("name", "description", "inputSchema", "annotations")
 UNAVAILABLE = ""  # 지문을 못 구했을 때. 이런 판정은 재사용·승인하지 않는다 (fail-closed)
 
 
 def tool_hash(tool: dict) -> str:
-    """도구 정의의 지문. 키 순서·공백이 달라도 같은 내용이면 같은 값이 나오도록 정규화한다.
+    """도구 정의 '전체'의 지문 (결정 #35). 키 순서·공백이 달라도 같은 내용이면 같은 값이 나오도록 정규화한다.
+    outputSchema·title·_meta 등 어느 필드가 바뀌어도 해시가 바뀌어 재검사된다 (러그풀이 숨을 필드를 남기지 않음).
     B도 LLM 결과 저장 키로 이 함수를 import해서 쓴다 (결정 #28)."""
-    subset = {k: tool[k] for k in HASH_FIELDS if k in tool}
-    canonical = json.dumps(subset, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    canonical = json.dumps(tool, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
