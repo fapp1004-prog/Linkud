@@ -1,6 +1,7 @@
 """B 1차 규칙. scan(text)->list[str]은 A의 정제 검사에서도 사용한다.
 
-규칙은 단서이지 의미 판별의 정답이 아니다. 숫자는 B 초기 제안이며 D6 전 고정/합의한다.
+규칙은 단서이지 의미 판별의 정답이 아니다. secrecy_request는 결정안의 40점이며,
+나머지 점수는 기존 B 초기 제안을 유지한다.
 """
 import base64
 import html
@@ -9,8 +10,8 @@ import unicodedata
 
 from checkers.b_metadata import MAX_BYTES, canonical_tool, text_fields
 
-VERSION = 'rules-v1'
-RISK = {'hidden_tag': 40, 'secrecy_request': 60, 'ssh_key_access': 60,
+VERSION = 'rules-v2-secrecy40'
+RISK = {'hidden_tag': 40, 'secrecy_request': 40, 'ssh_key_access': 60,
         'env_file_access': 50, 'tool_shadowing': 60, 'invisible_chars': 40}
 _PATTERNS = {
     'hidden_tag': re.compile(r'<\s*/?\s*(?:important|system|developer|instructions?|hidden|override)\b', re.I),
