@@ -53,7 +53,11 @@ def policy_fp(policy: dict) -> str:
 
 
 # 검사기 동작에 영향을 주는 LINKUD_* 설정 중, 파일 위치·로그처럼 판정과 무관한 것
-_FP_SKIP = {"LINKUD_DB", "LINKUD_DB_PATH", "LINKUD_AUDIT", "LINKUD_LOG", "LINKUD_POLICY"}
+_FP_SKIP = {"LINKUD_DB", "LINKUD_DB_PATH", "LINKUD_AUDIT", "LINKUD_LOG", "LINKUD_POLICY",
+            # B의 예산·단가·저장 위치·대기 시간: 판정 결과와 무관. 바꿔도 승인이 풀리지 않게
+            # (모델·추론 강도·최대 출력 토큰은 판정에 영향 → 지문에 남김)
+            "LINKUD_B_BUDGET_USD", "LINKUD_B_INPUT_PRICE", "LINKUD_B_OUTPUT_PRICE",
+            "LINKUD_B_CACHE", "LINKUD_B_TIMEOUT"}
 
 
 def _dotenv_linkud(path: Path) -> dict[str, str]:

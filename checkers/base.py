@@ -74,6 +74,8 @@ SIGNALS: dict[str, str] = {
     "no_supply_info": "lockfile이 없어 공급망 검사를 못 함 (risk 40)",
     # C — 신원
     "identity_changed": "이름·버전·파일 지문이 처음과 다름 → 최소 제한",
+    # A — 게이트웨이 (검사기가 아니라 게이트웨이가 직접 붙임)
+    "hash_churn": "도구 정의를 너무 자주 바꿈 → 새 정의는 검사 없이 제한·비노출",
 }
 
 

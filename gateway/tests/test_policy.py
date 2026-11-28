@@ -133,6 +133,15 @@ class CheckerFpTest(unittest.TestCase):
         self.assertEqual(base, self.fp({"LINKUD_DB": "/x.db", "LINKUD_AUDIT": "/a", "LINKUD_LOG": "DEBUG"}))
         self.assertEqual(base, self.fp({"OPENAI_API_KEY": "sk-x", "PATH": "/bin"}))
 
+    def test_budget_settings_do_not_count(self):
+        """B의 예산·단가·저장 위치·대기 시간은 판정과 무관 → 바꿔도 승인이 풀리지 않는다."""
+        base = self.fp()
+        self.assertEqual(base, self.fp({"LINKUD_B_BUDGET_USD": "10", "LINKUD_B_INPUT_PRICE": "1",
+                                        "LINKUD_B_OUTPUT_PRICE": "5", "LINKUD_B_CACHE": "/c.db",
+                                        "LINKUD_B_TIMEOUT": "20"}))
+        for k in ("LINKUD_B_MODEL", "LINKUD_B_EFFORT", "LINKUD_B_MAX_OUTPUT_TOKENS"):  # 판정에 영향 → 남김
+            self.assertNotEqual(base, self.fp({k: "x"}), k)
+
     def test_dotenv_linkud_only(self):
         base = self.fp()
         (self.root / ".env").write_text("OPENAI_API_KEY=sk-secret\n", encoding="utf-8")

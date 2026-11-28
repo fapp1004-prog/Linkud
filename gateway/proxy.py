@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -55,6 +57,18 @@ class Gateway:
         self.file_fp_fn, self.dep_fp_fn = load_fingerprints()
         self.scan = load_scan(self.mode)
         self.timeout = float(self.policy.get("checkers", {}).get("timeout_seconds", 10))
+        # 해시 변경 횟수 제한 (결정 #38): 첫 목록 이후 '새 해시가 섞인 목록'이 1시간에 N번을 넘으면
+        # 새 해시는 검사기(LLM) 없이 제한·비노출
+        churn = self.policy.get("churn") or {}
+        self.churn_limit = int(churn.get("max_changes_per_hour", 5))
+        self.churn_window = float(churn.get("window_seconds", 3600))
+        self._seen_hashes: set[str] = set()
+        self._change_times: deque[float] = deque()
+        self._first_list_done = False
+        self._in_first_listing = False  # 첫 목록이 여러 페이지(cursor)일 때 뒤 페이지도 '첫 목록'
+        self._listing_counted = False   # 이번 목록(여러 페이지)에서 이미 한 번 셌나
+        self._listing_over = False      # 이번 목록이 한도를 넘었나 (뒤 페이지의 새 해시도 같은 처리)
+        self._churn_lock = threading.Lock()
 
         self.proc: subprocess.Popen | None = None
         self._client_lock = threading.Lock()
@@ -225,7 +239,7 @@ class Gateway:
             with self._tools_lock:
                 self._tools = {}
         try:
-            verdicts = self.verify_tools(tools)
+            verdicts = self.verify_tools(tools, first_page)
         except Exception as e:  # 검증 자체가 망가지면 아무 도구도 보여주지 않는다 (fail-closed)
             log.exception("도구 검증 실패")
             audit.write("checker_error", server_id=self.server_id, checker="gateway", error=f"{type(e).__name__}: {e}")
@@ -278,11 +292,69 @@ class Gateway:
                 out.append(UNAVAILABLE)
         return out[0], out[1]
 
-    def verify_tools(self, tools: list[dict]) -> list[Verdict]:
+    def verify_tools(self, tools: list[dict], first_page: bool = True) -> list[Verdict]:
         file_fp, dep_fp = self.fingerprints()
         server_level = _Once(self._run_server_level)  # 공급망·신원은 이 목록에서 서버당 한 번만
+        hashes = [tool_hash(t) for t in tools]
+        churned = self._churn_check(hashes, first_page)
+
+        def one(t, h):
+            if h in churned:
+                return self._churn_verdict(t, h, file_fp, dep_fp)
+            return self.verify_tool(t, file_fp, dep_fp, server_level)
+
         with ThreadPoolExecutor(max_workers=4) as ex:
-            return list(ex.map(lambda t: self.verify_tool(t, file_fp, dep_fp, server_level), tools))
+            return list(ex.map(one, tools, hashes))
+
+    def _churn_check(self, hashes: list[str], first_page: bool = True) -> set[str]:
+        """이번 목록(페이지)에서 '검사 없이 제한'할 해시 집합 (결정 #38).
+        세는 단위는 '처음 보는 해시가 하나라도 섞인 tools/list' 한 번 — 도구 개수가 아니다.
+        첫 목록(여러 페이지면 그 페이지 전부)·변경 없는 목록은 세지 않는다.
+        서버 파일·의존성·정책 지문만 바뀌고 도구 해시가 그대로인 경우도 세지 않는다.
+        한도를 넘은 해시는 '본 적 있음'으로 기억하지 않아서, 시간이 지나면 다시 정상 검사된다."""
+        with self._churn_lock:
+            if first_page and self._first_list_done:  # 새 목록 시작
+                self._in_first_listing = False
+                self._listing_counted = self._listing_over = False
+            if not self._first_list_done:
+                self._first_list_done = self._in_first_listing = True
+            new = {h for h in hashes if h not in self._seen_hashes}
+            if self._in_first_listing or not new:
+                self._seen_hashes |= new
+                return set()
+            if self._listing_counted:  # 같은 목록의 다음 페이지: 이미 셌으니 그 결과를 따른다
+                if self._listing_over:
+                    return new
+                self._seen_hashes |= new
+                return set()
+            self._listing_counted = True
+            now = time.monotonic()
+            while self._change_times and now - self._change_times[0] > self.churn_window:
+                self._change_times.popleft()
+            if len(self._change_times) >= self.churn_limit:
+                self._listing_over = True
+                return new  # 기억하지 않음 → 시간이 지나면 다시 '새 해시'로 정상 검사
+            self._change_times.append(now)
+            self._seen_hashes |= new
+            return set()
+
+    def _churn_verdict(self, tool: dict, h: str, file_fp: str, dep_fp: str) -> Verdict:
+        """검사기를 부르지 않은 임시 판정. 저장하지 않는다 → 재사용·승인 불가, 호출은 '판정 없음'으로 거절."""
+        key = CacheKey(self.server_id, h, file_fp, dep_fp, self.policy_fp, self.mode)
+        cached = self.store.get(key)  # 이미 검사해 둔 판정은 비용이 없으니 그대로 쓴다
+        if cached:
+            return cached
+        reason = f"hash_churn: 1시간에 도구 정의 변경 {self.churn_limit}회 초과 → 검사 생략"
+        v = Verdict(key=key, tool=tool.get("name", ""), grade="restrict", score=0,
+                    signals=["hash_churn"], reasons=[reason], exposable=False,
+                    server_name=self.server_info["name"], server_version=self.server_info["version"],
+                    results=[{"checker": "gateway", "risk": 100, "hard_block": False,
+                              "signals": ["hash_churn"], "evidence": reason}])
+        audit.write("verdict", server_id=self.server_id, server_name=v.server_name, tool=v.tool, hash=h,
+                    rowid=None, score=0, grade="restrict", exposable=False, fingerprints=key.complete,
+                    signals=v.signals, reasons=v.reasons)
+        log.warning("판정 %s/%s → 제한 (hash_churn, 검사 생략)", self.server_id, v.tool)
+        return v
 
     def _lock_for(self, key: CacheKey) -> threading.Lock:
         with self._verify_locks_guard:
@@ -381,11 +453,11 @@ _SECRET_EXACT = {"SSH_AUTH_SOCK", "GPG_AGENT_INFO"}
 def child_env(environ, pass_env=()) -> tuple[dict[str, str], list[str]]:
     """서버 프로세스에 넘길 환경변수. 비밀처럼 보이는 이름·게이트웨이 설정(LINKUD_*)은 빼고,
     --pass-env로 명시한 이름만 예외로 넘긴다. (넘길 환경, 뺀 이름 목록)을 돌려준다."""
-    allow = set(pass_env)
+    allow = {p.upper() for p in pass_env}  # Windows는 환경변수 이름이 대문자로 바뀌므로 대문자로 비교
     env, withheld = {}, []
     for k, v in environ.items():
         secret = (k.upper().startswith(_SECRET_PREFIX) or k.upper() in _SECRET_EXACT or _SECRET_NAME.search(k))
-        if secret and k not in allow:
+        if secret and k.upper() not in allow:
             withheld.append(k)
         else:
             env[k] = v
