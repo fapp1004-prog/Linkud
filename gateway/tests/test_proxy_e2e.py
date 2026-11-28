@@ -276,26 +276,66 @@ class ProxyE2E(unittest.TestCase):
         self.assertEqual(sum(e["event"] == "verdict" for e in self.audit()), 8)  # 정책 지문이 달라 재판정
         self.assertEqual(len({v.key.policy_fp for v in self.store().all()}), 2)
 
-    def test_real_mode_without_b_and_fingerprints_is_fail_closed(self):
-        """실제 모드에서 B(검사기·scan)가 없고 서버 지문도 못 구하면: 전부 제한, 정제 불가로 비노출,
-        판정 재사용 안 함, 승인 불가. 서버를 모듈(-m)로 실행해 폴더를 모르게 만들어서,
-        C의 지문 함수가 있든 없든 지문은 빈 값이 된다 (결정 #26·#29)."""
-        s = Session(self.tmp.name, dev=False,
-                    server_cmd=[sys.executable, "-m", "gateway.tests.fake_server"])
+    def test_real_mode_checker_errors_and_no_fingerprints_fail_closed(self):
+        """실제 모드에서 검사기가 전부 에러이고 서버 지문도 못 구하면: 전부 제한, 원본은 절대 안 보이고,
+        판정 재사용·승인도 안 된다 (결정 #26·#29).
+        B·C가 레포에 있든 없든 같은 결과가 나오게: 정책은 없는 검사기만 가리키게 하고(→ 에러),
+        서버는 모듈(-m)로 실행해 폴더를 모르게 만든다(→ C의 지문 함수가 있어도 빈 값)."""
+        pol = self.dir / "policy.yaml"
+        text = (ROOT / "policy.yaml").read_text(encoding="utf-8")
+        text = text.replace("  injection: 0.6\n  supply_chain: 0.25\n  identity: 0.15",
+                            "  missing_a: 0.6\n  missing_b: 0.4")
+        self.assertIn("missing_a", text)
+        pol.write_text(text, encoding="utf-8")
+        s = Session(self.tmp.name, dev=False, server_cmd=[sys.executable, "-m", "gateway.tests.fake_server"],
+                    LINKUD_POLICY=str(pol))
         try:
             s.start()
-            self.assertEqual(s.tools(), {})
-            self.assertIn("error", s.call("add"))
+            shown = s.tools()
+            # B의 scan이 있으면 정제본이 보이고, 없으면 숨겨진다. 어느 쪽이든 원본 설명은 절대 안 나간다
+            self.assertTrue(all(t["description"] == "관리자 승인이 필요한 도구입니다." for t in shown.values()))
+            r = s.call("add")
+            self.assertTrue("error" in r or r["result"].get("isError"))   # 호출은 통과하지 않음
             s.tools()
         finally:
             s.close()
         store = self.store()
         vs = store.all("real")
         self.assertEqual({v.grade for v in vs}, {"restrict"})
-        self.assertTrue(all(v.key.file_fp == "" and not v.exposable for v in vs))
+        self.assertTrue(all(v.key.file_fp == "" for v in vs))
         self.assertFalse(store.approve(vs[0].rowid, "real")[0])
         self.assertEqual(sum(e["event"] == "verdict" for e in self.audit()), 8)  # 지문 없음 → 재사용 안 함
         self.assertEqual(len(vs), 4)  # 같은 키라 행은 덮어씀
+
+    def test_outputschema_change_rechecks(self):
+        """outputSchema만 바뀌어도 해시가 바뀌어 다시 검사한다 (결정 #35)."""
+        s = Session(self.tmp.name, FAKE_RUGPULL_OUTPUT="1")
+        try:
+            s.start()
+            s.tools()
+            s.tools()
+        finally:
+            s.close()
+        verdicts = [e for e in self.audit() if e["event"] == "verdict"]
+        self.assertEqual(len(verdicts), 5)                      # 4개 + 바뀐 add 1개
+        self.assertEqual([e["tool"] for e in verdicts[4:]], ["add"])
+
+    def test_child_env_withholds_secrets(self):
+        """서버 프로세스에는 비밀처럼 보이는 변수·LINKUD_*를 넘기지 않고, --pass-env로 명시한 것만 넘긴다 (결정 #37)."""
+        dump = self.dir / "env.json"
+        s = Session(self.tmp.name, args=["--server-id", "fake-calc", "--pass-env", "GH_TOKEN"],
+                    FAKE_ENV_DUMP=str(dump), MY_API_KEY="k", OPENAI_API_KEY="sk-x", DB_PASSWORD="p",
+                    SSH_AUTH_SOCK="/tmp/agent", GH_TOKEN="t", PLAIN_VAR="z")
+        try:
+            s.start()
+        finally:
+            s.close()
+        names = set(json.loads(dump.read_text(encoding="utf-8")))
+        self.assertIn("PLAIN_VAR", names)
+        self.assertIn("GH_TOKEN", names)                        # 명시해서 넘김
+        for hidden in ("MY_API_KEY", "OPENAI_API_KEY", "DB_PASSWORD", "SSH_AUTH_SOCK"):
+            self.assertNotIn(hidden, names)
+        self.assertFalse([n for n in names if n.startswith("LINKUD_")])
 
 
 class CliTest(unittest.TestCase):
@@ -321,6 +361,22 @@ class CliTest(unittest.TestCase):
     def test_server_dir_must_exist(self):
         r = self.run_gw("--server-id", "x", "--server-dir", "/no/such/dir", "--", sys.executable, str(FAKE))
         self.assertEqual(r.returncode, 2)
+
+    def test_pass_env_name_checked(self):
+        for bad in ("A-B", "LINKUD_DB", "1X"):
+            r = self.run_gw("--server-id", "x", "--pass-env", bad, "--", sys.executable, str(FAKE))
+            self.assertEqual(r.returncode, 2, bad)
+
+
+class ChildEnvUnit(unittest.TestCase):
+    def test_rules(self):
+        from gateway.proxy import child_env
+        env, withheld = child_env({"PATH": "/bin", "SYSTEMROOT": "C:\\Windows", "PYTHONPATH": "x",
+                                   "AWS_SECRET_ACCESS_KEY": "s", "GITHUB_TOKEN": "t", "LINKUD_DB": "d",
+                                   "KEYBOARD_LAYOUT": "us", "SESSIONNAME": "Console"}, ["GITHUB_TOKEN"])
+        self.assertEqual(set(env), {"PATH", "SYSTEMROOT", "PYTHONPATH", "GITHUB_TOKEN", "KEYBOARD_LAYOUT",
+                                    "SESSIONNAME"})
+        self.assertEqual(set(withheld), {"AWS_SECRET_ACCESS_KEY", "LINKUD_DB"})
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import time
+from decimal import Decimal, ROUND_HALF_UP
 
 from gateway.cache import tool_hash
 from checkers import rules, b_prompt, llm_client
@@ -19,9 +20,10 @@ def rules_result(tool):
 
 
 def verdict_result(verdict, config, latency_ms=0):
-    """온라인/Batch 공통 변환. 위험도 변경은 팀 논의까지 기존 PR 값 유지."""
+    """결정안 ⑦: 전체 확신도 구간에서 p*100 반올림. 온라인/Batch 공통."""
     probability = float(verdict['attack_probability'])
-    risk = math.ceil(100 * probability) if probability >= 0.5 else 0
+    # 소수 첫째 자리가 5이면 올림. 이진 부동소수 오차와 round의 짝수 반올림을 피한다.
+    risk = int((Decimal(str(probability)) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
     return {'checker': 'injection', 'risk': risk, 'hard_block': False,
             'signals': ['llm_flagged'] if probability >= 0.5 else [],
             'confidence': probability, 'model': config.model, 'prompt_version': b_prompt.PROMPT_VERSION,

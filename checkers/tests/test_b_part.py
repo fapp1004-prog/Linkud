@@ -124,7 +124,7 @@ class LLMSchemaTest(Tmp):
         i = Inspector(self.config, self.transport)
         r = i.check(SAFE)
         self.assertEqual(r['confidence'], 0.02)
-        self.assertEqual(r['risk'], 0)
+        self.assertEqual(r['risk'], 2)
         self.assertEqual(b_grade(r, load_policy()), 'allow')
 
     def test_high_attack_probability_blocks_in_a(self):
@@ -210,7 +210,7 @@ class HTTPBoundaryTest(Tmp):
                 'usage': {'input_tokens': 50, 'output_tokens': 40}})
         with self.mocked_client(handler):
             result = Inspector(self.config).check(SAFE)
-        self.assertEqual(result['risk'], 0)
+        self.assertEqual(result['risk'], 1)
 
     def test_http_error_body_is_not_logged(self):
         import httpx
@@ -238,13 +238,24 @@ class CacheTest(Tmp):
         self.assertEqual(len(self.calls), 1)
         self.assertTrue(i.last_meta['cache_hit'])
 
-    def test_output_schema_change_invalidates_b_even_if_a_hash_unchanged(self):
+    def test_full_tool_change_invalidates_a_hash_and_b_cache(self):
         i = Inspector(self.config, self.transport)
-        changed = {**SAFE, 'outputSchema': {'description': 'A new description'}}
-        self.assertEqual(tool_hash(SAFE), tool_hash(changed))
         i.check(SAFE)
-        i.check(changed)
-        self.assertEqual(len(self.calls), 2)
+        # A #23 결정 #35: 검사 범위와 해시 범위 모두 도구 정의 전체다.
+        changes = {'outputSchema': {'description': 'A new description'},
+                   'title': 'New title', '_meta': {'note': 'New metadata'}}
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                changed = {**SAFE, field: value}
+                self.assertNotEqual(tool_hash(SAFE), tool_hash(changed))
+                before = len(self.calls)
+                i.check(changed)
+                self.assertEqual(len(self.calls), before + 1)
+                self.assertFalse(i.last_meta['cache_hit'])
+                # 내용이 같은 재요청은 새 키의 LLM 응답을 재사용한다.
+                i.check(changed)
+                self.assertTrue(i.last_meta['cache_hit'])
+                self.assertEqual(len(self.calls), before + 1)
 
     def test_key_and_prompt_settings_changes(self):
         Inspector(self.config, self.transport).check(SAFE)
@@ -274,7 +285,7 @@ class CacheTest(Tmp):
             return self.transport(*args)
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             futures = [pool.submit(Inspector(self.config, slow).check, SAFE) for _ in range(3)]
-            self.assertEqual([f.result()['risk'] for f in futures], [0, 0, 0])
+            self.assertEqual([f.result()['risk'] for f in futures], [2, 2, 2])
         self.assertEqual(len(self.calls), 1)
 
     def test_concurrent_first_use_initializes_cache_and_calls_once(self):
@@ -283,7 +294,7 @@ class CacheTest(Tmp):
             return self.transport(*args)
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             futures = [pool.submit(Inspector(self.config, slow).check, SAFE) for _ in range(4)]
-            self.assertEqual([f.result()['risk'] for f in futures], [0, 0, 0, 0])
+            self.assertEqual([f.result()['risk'] for f in futures], [2, 2, 2, 2])
         self.assertEqual(len(self.calls), 1)
 
     def test_fresh_actually_calls_again(self):

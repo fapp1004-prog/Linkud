@@ -5,7 +5,8 @@ JSON-RPC 메시지(한 줄에 하나)를 중계하면서 tools/list·tools/call�
 
 실행:
     python -m gateway.proxy --server-id calc-ok -- python testservers/calc_ok/server.py
-    (--server-id 필수. `--` 뒤가 진짜 서버 실행 명령. 서버 폴더를 못 찾는 실행 방식이면 --server-dir로 지정)
+    (--server-id 필수. `--` 뒤가 진짜 서버 실행 명령. 서버 폴더를 못 찾는 실행 방식이면 --server-dir로 지정.
+     서버가 꼭 필요로 하는 비밀 환경변수는 --pass-env 이름 으로만 넘긴다)
 
 주의: 이 프로세스의 stdout은 곧 AI 앱과의 통신 선이다. print()가 섞이면 연결이 깨지므로
 시작하자마자 sys.stdout을 stderr로 돌려놓는다. 프로토콜 출력은 to_client()로만 한다.
@@ -24,7 +25,7 @@ from pathlib import Path
 
 from gateway import audit, paths
 from gateway.cache import UNAVAILABLE, CacheKey, TrustStore, Verdict, tool_hash
-from gateway.policy import (SERVER_LEVEL, decide, load_checkers, load_fingerprints, load_policy, policy_fp,
+from gateway.policy import (SERVER_LEVEL, decide, judge_fp, load_checkers, load_fingerprints, load_policy,
                             run_checker)
 from gateway.sanitize import RESTRICTED_DESCRIPTION, Unsafe, load_scan, sanitize_tool  # noqa: F401 (테스트·문서용 재노출)
 
@@ -37,7 +38,8 @@ RESTRICT_MESSAGE = "관리자 승인이 필요한 도구입니다. 승인 후 �
 
 class Gateway:
     def __init__(self, server_id: str, server_cmd: list[str], client_in, client_out,
-                 server_dir: str | None = None, store: TrustStore | None = None, policy: dict | None = None):
+                 server_dir: str | None = None, store: TrustStore | None = None, policy: dict | None = None,
+                 pass_env: list[str] | None = None):
         self.server_id = server_id
         self.server_cmd = server_cmd
         self.client_in = client_in          # AI 앱 → 게이트웨이 (바이너리 스트림)
@@ -47,7 +49,8 @@ class Gateway:
         # C의 신원 검사기가 같은 DB(identity_baseline 표)를 찾도록 현재 모드의 DB 경로를 알려준다 (결정 #27)
         os.environ["LINKUD_DB_PATH"] = str(self.store.db_file)
         self.policy = policy or load_policy()
-        self.policy_fp = policy_fp(self.policy)
+        self.policy_fp = judge_fp(self.policy)  # 정책 + 검사기 버전 (결정 #36)
+        self.pass_env = list(pass_env or [])
         self.checkers = load_checkers(self.policy)
         self.file_fp_fn, self.dep_fp_fn = load_fingerprints()
         self.scan = load_scan(self.mode)
@@ -81,7 +84,9 @@ class Gateway:
     # ── 실행 ──
     def run(self) -> int:
         exe = shutil.which(self.server_cmd[0]) or self.server_cmd[0]
-        env = {k: v for k, v in os.environ.items() if k != "LINKUD_DB_PATH"}  # 서버에는 DB 위치를 넘기지 않는다
+        env, withheld = child_env(os.environ, self.pass_env)  # 비밀처럼 보이는 변수·LINKUD_*는 서버에 안 넘김
+        if withheld:
+            log.info("서버에 넘기지 않은 환경변수(이름만): %s", ", ".join(sorted(withheld)))
         self.proc = subprocess.Popen(
             [exe, *self.server_cmd[1:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=sys.stderr, bufsize=0, env=env,
@@ -367,14 +372,35 @@ def _server_dir(cmd: list[str]) -> str | None:
     return None
 
 
+# 자식 서버(믿을 수 없는 코드)에 넘기지 않을 환경변수 (결정 #37)
+_SECRET_NAME = re.compile(r"(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(_|$)", re.I)
+_SECRET_PREFIX = ("OPENAI_", "ANTHROPIC_", "LINKUD_")
+_SECRET_EXACT = {"SSH_AUTH_SOCK", "GPG_AGENT_INFO"}
+
+
+def child_env(environ, pass_env=()) -> tuple[dict[str, str], list[str]]:
+    """서버 프로세스에 넘길 환경변수. 비밀처럼 보이는 이름·게이트웨이 설정(LINKUD_*)은 빼고,
+    --pass-env로 명시한 이름만 예외로 넘긴다. (넘길 환경, 뺀 이름 목록)을 돌려준다."""
+    allow = set(pass_env)
+    env, withheld = {}, []
+    for k, v in environ.items():
+        secret = (k.upper().startswith(_SECRET_PREFIX) or k.upper() in _SECRET_EXACT or _SECRET_NAME.search(k))
+        if secret and k not in allow:
+            withheld.append(k)
+        else:
+            env[k] = v
+    return env, withheld
+
+
 class UsageError(Exception):
     pass
 
 
-USAGE = "사용법: python -m gateway.proxy --server-id <id> [--server-dir <폴더>] -- <서버 실행 명령>"
+USAGE = ("사용법: python -m gateway.proxy --server-id <id> [--server-dir <폴더>] [--pass-env <이름> ...] "
+         "-- <서버 실행 명령>")
 
 
-def parse_args(argv: list[str]) -> tuple[str, str | None, list[str]]:
+def parse_args(argv: list[str]) -> tuple[str, str | None, list[str], list[str]]:
     if "--" not in argv:
         raise UsageError("서버 실행 명령 앞에 `--`가 필요합니다")
     i = argv.index("--")
@@ -382,16 +408,21 @@ def parse_args(argv: list[str]) -> tuple[str, str | None, list[str]]:
     if not cmd:
         raise UsageError("`--` 뒤에 서버 실행 명령이 없습니다")
     server_id = server_dir = None
+    pass_env: list[str] = []
     it = iter(opts)
     for a in it:
-        if a in ("--server-id", "--server-dir"):
+        if a in ("--server-id", "--server-dir", "--pass-env"):
             val = next(it, None)
             if val is None:
                 raise UsageError(f"{a} 값이 없습니다")
             if a == "--server-id":
                 server_id = val
-            else:
+            elif a == "--server-dir":
                 server_dir = val
+            else:
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", val) or val.upper().startswith("LINKUD_"):
+                    raise UsageError(f"--pass-env 이름이 이상합니다: {val!r}")
+                pass_env.append(val)
         else:
             raise UsageError(f"모르는 옵션: {a}")
     if server_id is None:
@@ -402,7 +433,7 @@ def parse_args(argv: list[str]) -> tuple[str, str | None, list[str]]:
         if not Path(server_dir).is_dir():
             raise UsageError(f"--server-dir 폴더가 없습니다: {server_dir}")
         server_dir = str(Path(server_dir).resolve())
-    return server_id, server_dir, cmd
+    return server_id, server_dir, pass_env, cmd
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -411,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     try:
-        server_id, server_dir, cmd = parse_args(argv)
+        server_id, server_dir, pass_env, cmd = parse_args(argv)
     except UsageError as e:
         print(f"[gateway] {e}\n{USAGE}", file=sys.stderr)
         return 2
@@ -421,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     proto_in, proto_out = sys.stdin.buffer, sys.stdout.buffer
     sys.stdout = sys.stderr  # 이후 누가 print 해도 통신 선을 더럽히지 않게 (SPEC 2장)
 
-    gw = Gateway(server_id, cmd, proto_in, proto_out, server_dir=server_dir)
+    gw = Gateway(server_id, cmd, proto_in, proto_out, server_dir=server_dir, pass_env=pass_env)
     return gw.run()
 
 

@@ -23,9 +23,12 @@ class HashTest(unittest.TestCase):
         a = {"name": "add", "description": "두 수를 더한다."}
         self.assertNotEqual(tool_hash(a), tool_hash({**a, "description": "두 수를 더한다!"}))
 
-    def test_unrelated_fields_ignored(self):
-        a = {"name": "add", "description": "d"}
-        self.assertEqual(tool_hash(a), tool_hash({**a, "title": "x"}))
+    def test_any_field_change_changes_hash(self):
+        """도구 정의 전체가 해시 대상 (결정 #35) — outputSchema만 바꾸는 러그풀도 재검사된다."""
+        a = {"name": "add", "description": "d", "inputSchema": {"type": "object"}}
+        for extra in ({"title": "x"}, {"outputSchema": {"type": "object", "description": "숨은 지시"}},
+                      {"annotations": {"title": "x"}}, {"_meta": {"k": "v"}}):
+            self.assertNotEqual(tool_hash(a), tool_hash({**a, **extra}), extra)
 
 
 class StoreTest(unittest.TestCase):

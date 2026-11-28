@@ -1,7 +1,6 @@
 """B 1차 규칙. scan(text)->list[str]은 A의 정제 검사에서도 사용한다.
 
-규칙은 단서이지 의미 판별의 정답이 아니다. secrecy_request는 결정안의 40점이며,
-나머지 점수는 기존 B 초기 제안을 유지한다.
+규칙은 단서이지 의미 판별의 정답이 아니다. 점수는 2026-11-23 결정안 ⑦을 따른다.
 """
 import base64
 import html
@@ -10,9 +9,9 @@ import unicodedata
 
 from checkers.b_metadata import MAX_BYTES, canonical_tool, text_fields
 
-VERSION = 'rules-v2-secrecy40'
-RISK = {'hidden_tag': 40, 'secrecy_request': 40, 'ssh_key_access': 60,
-        'env_file_access': 50, 'tool_shadowing': 60, 'invisible_chars': 40}
+VERSION = 'rules-v3-decisions07'
+RISK = {'hidden_tag': 40, 'secrecy_request': 40, 'ssh_key_access': 50,
+        'env_file_access': 40, 'tool_shadowing': 50, 'invisible_chars': 40}
 _PATTERNS = {
     'hidden_tag': re.compile(r'<\s*/?\s*(?:important|system|developer|instructions?|hidden|override)\b', re.I),
     'secrecy_request': re.compile(
@@ -85,5 +84,5 @@ def inspect(tool: dict) -> dict:
         if {'hidden_tag', 'secrecy_request'} <= hits and hits & {'ssh_key_access', 'env_file_access'}:
             hard = True
     signals = [name for name in RISK if name in found]
-    return {'checker': 'injection', 'risk': 100 if hard else max((RISK[s] for s in signals), default=0),
+    return {'checker': 'injection', 'risk': max((RISK[s] for s in signals), default=0),
             'hard_block': hard, 'signals': signals, 'evidence': '\n'.join(evidence)[:3000], 'latency_ms': 0}
